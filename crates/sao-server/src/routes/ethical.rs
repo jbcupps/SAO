@@ -1,4 +1,4 @@
-﻿use axum::{routing::post, Json, Router};
+use axum::{routing::post, Json, Router};
 use serde_json::{json, Value};
 use crate::state::AppState;
 
@@ -7,7 +7,7 @@ pub fn routes() -> Router<AppState> {
 }
 
 async fn evaluate(Json(_body): Json<Value>) -> Json<Value> {
-    Json(json\!({
+    Json(json!({
         "status": "not_configured",
         "message": "Ethical evaluation service not yet connected",
     }))
