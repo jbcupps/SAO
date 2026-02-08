@@ -17,3 +17,8 @@ anyhow = { workspace = true }
 uuid = { workspace = true }
 dirs = { workspace = true }
 futures-util = { workspace = true }
+sqlx = { workspace = true, optional = true }
+
+[features]
+default = []
+postgres = ["sqlx"]

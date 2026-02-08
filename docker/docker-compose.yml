@@ -11,25 +11,31 @@ services:
       - SAO_BIND_ADDR=0.0.0.0:3100
       - SAO_DATA_DIR=/data/sao
       - RUST_LOG=info
-      # Uncomment to enable PostgreSQL:
-      # - DATABASE_URL=postgres://sao:sao@db:5432/sao
+      - DATABASE_URL=postgres://sao:sao@db:5432/sao
     volumes:
       - sao-data:/data/sao
-    # depends_on:
-    #   - db
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
 
-  # Uncomment for PostgreSQL support:
-  # db:
-  #   image: postgres:16-alpine
-  #   environment:
-  #     POSTGRES_USER: sao
-  #     POSTGRES_PASSWORD: sao
-  #     POSTGRES_DB: sao
-  #   volumes:
-  #     - pg-data:/var/lib/postgresql/data
-  #   ports:
-  #     - "5432:5432"
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: sao
+      POSTGRES_PASSWORD: sao
+      POSTGRES_DB: sao
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sao"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
 
 volumes:
   sao-data:
-  # pg-data:
+  pg-data:

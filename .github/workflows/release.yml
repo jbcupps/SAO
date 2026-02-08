@@ -1,0 +1,150 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g., 0.1.0)"
+        required: true
+
+env:
+  VERSION: ${{ github.event.inputs.version }}
+
+jobs:
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.create.outputs.release_id }}
+      upload_url: ${{ steps.create.outputs.upload_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create draft release
+        id: create
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          release=$(gh release create "v${VERSION}" \
+            --draft \
+            --title "v${VERSION}" \
+            --generate-notes \
+            --json id,uploadUrl)
+          echo "release_id=$(echo "$release" | jq -r '.id')" >> "$GITHUB_OUTPUT"
+          echo "upload_url=$(echo "$release" | jq -r '.uploadUrl')" >> "$GITHUB_OUTPUT"
+
+  build-binaries:
+    name: Build (${{ matrix.target }})
+    needs: create-release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: sao-server-linux-x64.tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: sao-server-windows-x64.zip
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: sao-server-macos-x64.tar.gz
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: sao-server-macos-arm64.tar.gz
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }} --features postgres
+
+      - name: Archive binary (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          tar czf ${{ matrix.artifact }} \
+            -C target/${{ matrix.target }}/release sao-server
+
+      - name: Archive binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive `
+            -Path "target/${{ matrix.target }}/release/sao-server.exe" `
+            -DestinationPath "${{ matrix.artifact }}"
+
+      - name: Upload release asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "v${{ env.VERSION }}" "${{ matrix.artifact }}" --clobber
+
+  publish-docker:
+    name: Publish Docker Image
+    needs: create-release
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Build Docker image
+        run: docker build -f docker/Dockerfile -t ghcr.io/jbcupps/sao:${{ env.VERSION }} .
+
+      - name: Tag as latest
+        run: docker tag ghcr.io/jbcupps/sao:${{ env.VERSION }} ghcr.io/jbcupps/sao:latest
+
+      - name: Push images
+        run: |
+          docker push ghcr.io/jbcupps/sao:${{ env.VERSION }}
+          docker push ghcr.io/jbcupps/sao:latest
+
+  publish-npm:
+    name: Publish npm Package
+    needs: build-binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Update package version
+        working-directory: npm-package
+        run: npm version "${{ env.VERSION }}" --no-git-tag-version
+
+      - name: Publish to npm
+        working-directory: npm-package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
+
+  finalize-release:
+    name: Finalize Release
+    needs: [build-binaries, publish-docker, publish-npm]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Mark release as non-draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "v${{ env.VERSION }}" --draft=false
