@@ -39,7 +39,7 @@ async fn handle_socket(socket: WebSocket, agent_id: String, state: AppState) {
     let send_task = tokio::spawn(async move {
         while let Ok(event) = rx.recv().await {
             let msg = serde_json::to_string(&event).unwrap_or_default();
-            if sender.send(Message::Text(msg.into())).await.is_err() {
+            if sender.send(Message::Text(msg)).await.is_err() {
                 break;
             }
         }

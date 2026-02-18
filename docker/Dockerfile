@@ -1,6 +1,16 @@
 # SAO - Secure Agent Orchestrator
 # Multi-stage build for minimal production image
 
+# Stage 1: Build frontend
+FROM node:20-slim AS frontend-builder
+
+WORKDIR /app/frontend
+COPY frontend/package.json frontend/package-lock.json* ./
+RUN npm install
+COPY frontend/ .
+RUN npm run build
+
+# Stage 2: Build Rust backend
 FROM rust:1.77-slim AS builder
 
 RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
@@ -10,11 +20,12 @@ WORKDIR /app
 # Copy workspace files
 COPY Cargo.toml rust-toolchain.toml ./
 COPY crates/ crates/
+COPY migrations/ migrations/
 
-# Build release binary with PostgreSQL support
-RUN cargo build --release --bin sao-server --features postgres
+# Build release binary
+RUN cargo build --release --bin sao-server
 
-# Runtime stage
+# Stage 3: Runtime
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y \
@@ -25,9 +36,11 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/target/release/sao-server /usr/local/bin/sao-server
+COPY --from=frontend-builder /app/frontend/dist /srv/sao/static
 
 ENV SAO_BIND_ADDR=0.0.0.0:3100
 ENV SAO_DATA_DIR=/data/sao
+ENV SAO_STATIC_DIR=/srv/sao/static
 ENV RUST_LOG=info
 
 EXPOSE 3100

@@ -1,6 +1,5 @@
 use crate::{
-    generate_master_key, load_master_key, sign_agent_key, verify_agent_signature, AgentEntry,
-    GlobalConfig,
+    generate_master_key, load_master_key, verify_agent_signature, AgentEntry, GlobalConfig,
 };
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};

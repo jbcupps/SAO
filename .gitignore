@@ -12,6 +12,13 @@ master_verifying.key
 target/
 *.pdb
 
+# Node / Frontend
+node_modules/
+frontend/dist/
+
+# Claude Code
+.claude/
+
 # Runtime data
 config.json
 global_settings.json

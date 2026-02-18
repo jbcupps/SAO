@@ -47,9 +47,14 @@ impl EthicalBridgeClient {
         }
     }
     /// Submit a response for ethical evaluation.
-    pub async fn evaluate(&self, request: &EthicalEvaluationRequest) -> anyhow::Result<EthicalScores> {
+    pub async fn evaluate(
+        &self,
+        request: &EthicalEvaluationRequest,
+    ) -> anyhow::Result<EthicalScores> {
         let url = format!("{}/api/analyze", self.base_url);
-        let resp = self.client.post(&url)
+        let resp = self
+            .client
+            .post(&url)
             .json(request)
             .send()
             .await?
