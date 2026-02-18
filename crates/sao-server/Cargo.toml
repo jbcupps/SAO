@@ -15,10 +15,16 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 uuid = { workspace = true }
+chrono = { workspace = true }
 dirs = { workspace = true }
 futures-util = { workspace = true }
-sqlx = { workspace = true, optional = true }
-
-[features]
-default = []
-postgres = ["sqlx"]
+sqlx = { workspace = true }
+jsonwebtoken = { workspace = true }
+webauthn-rs = { workspace = true }
+webauthn-rs-proto = { workspace = true }
+rand = { workspace = true }
+sha2 = { workspace = true }
+base64 = { workspace = true }
+url = { workspace = true }
+openidconnect = { workspace = true }
+reqwest = { workspace = true }

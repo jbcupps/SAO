@@ -1,8 +1,13 @@
 //! Application state for sao-server.
 
 use sao_core::IdentityManager;
+use sqlx::PgPool;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::RwLock;
+use webauthn_rs::Webauthn;
+
+use crate::vault_state::VaultState;
 
 /// Shared application state for the SAO orchestration server.
 #[derive(Clone)]
@@ -15,8 +20,14 @@ pub struct AppStateInner {
     pub active_agent_id: std::sync::RwLock<Option<String>>,
     /// WebSocket broadcast channel for streaming events to connected agents
     pub ws_tx: tokio::sync::broadcast::Sender<WsEvent>,
-    /// PostgreSQL connection pool (optional)
-    pub db: crate::db::DbPool,
+    /// PostgreSQL connection pool
+    pub db: PgPool,
+    /// Vault seal state
+    pub vault_state: RwLock<VaultState>,
+    /// WebAuthn relying party
+    pub webauthn: Arc<Webauthn>,
+    /// JWT signing secret
+    pub jwt_secret: [u8; 32],
 }
 
 /// Events sent to WebSocket clients.
@@ -27,7 +38,12 @@ pub struct WsEvent {
 }
 
 /// Initialize the SAO application state.
-pub fn init_app_state(db: crate::db::DbPool) -> AppState {
+pub fn init_app_state(
+    db: PgPool,
+    vault_state: VaultState,
+    webauthn: Webauthn,
+    jwt_secret: [u8; 32],
+) -> AppState {
     let data_root = default_data_root();
 
     let identity_manager = Arc::new(
@@ -45,6 +61,9 @@ pub fn init_app_state(db: crate::db::DbPool) -> AppState {
             active_agent_id: std::sync::RwLock::new(None),
             ws_tx,
             db,
+            vault_state: RwLock::new(vault_state),
+            webauthn: Arc::new(webauthn),
+            jwt_secret,
         }),
     }
 }

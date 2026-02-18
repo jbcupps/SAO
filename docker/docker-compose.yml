@@ -10,8 +10,11 @@ services:
     environment:
       - SAO_BIND_ADDR=0.0.0.0:3100
       - SAO_DATA_DIR=/data/sao
+      - SAO_STATIC_DIR=/srv/sao/static
       - RUST_LOG=info
       - DATABASE_URL=postgres://sao:sao@db:5432/sao
+      - SAO_RP_ID=localhost
+      - SAO_RP_ORIGIN=http://localhost:3100
     volumes:
       - sao-data:/data/sao
     depends_on:
