@@ -1,11 +1,11 @@
-pub mod pool;
-pub mod migrate;
+pub mod admin;
 pub mod agents;
 pub mod audit;
+pub mod migrate;
+pub mod oidc;
+pub mod pool;
+pub mod sessions;
 pub mod users;
 pub mod vault;
 pub mod vault_key;
 pub mod webauthn;
-pub mod sessions;
-pub mod oidc;
-pub mod admin;

@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AgentRegistration {
     pub agent_id: String,
-    pub public_key: String,  // base64-encoded Ed25519 public key
-    pub signature: String,   // base64-encoded signature from master key
+    pub public_key: String, // base64-encoded Ed25519 public key
+    pub signature: String,  // base64-encoded signature from master key
     pub name: String,
     pub capabilities: Vec<String>,
 }

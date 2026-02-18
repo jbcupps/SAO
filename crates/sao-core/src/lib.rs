@@ -1,9 +1,9 @@
-pub mod identity_manager;
-pub mod global_config;
-pub mod master_key;
 pub mod agent_bridge;
 pub mod ethical_bridge;
+pub mod global_config;
+pub mod identity_manager;
+pub mod master_key;
 pub mod vault;
-pub use identity_manager::*;
 pub use global_config::*;
+pub use identity_manager::*;
 pub use master_key::*;

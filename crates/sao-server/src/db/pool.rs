@@ -4,8 +4,8 @@ use sqlx::PgPool;
 /// Initialize the PostgreSQL connection pool from DATABASE_URL.
 /// Panics if DATABASE_URL is not set or connection fails.
 pub async fn init_pool() -> PgPool {
-    let database_url = std::env::var("DATABASE_URL")
-        .expect("DATABASE_URL environment variable must be set");
+    let database_url =
+        std::env::var("DATABASE_URL").expect("DATABASE_URL environment variable must be set");
 
     let pool = PgPoolOptions::new()
         .max_connections(10)

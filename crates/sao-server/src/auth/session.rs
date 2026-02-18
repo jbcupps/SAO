@@ -8,7 +8,7 @@ use uuid::Uuid;
 /// JWT claims for session tokens.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
-    pub sub: String,      // user_id
+    pub sub: String, // user_id
     pub username: String,
     pub role: String,
     pub exp: i64,

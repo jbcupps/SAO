@@ -1,14 +1,14 @@
-pub mod health;
-pub mod agents;
-pub mod ethical;
-pub mod vault;
-pub mod setup;
-pub mod auth;
-pub mod oidc;
 pub mod admin;
+pub mod agents;
+pub mod auth;
+pub mod ethical;
+pub mod health;
+pub mod oidc;
+pub mod setup;
+pub mod vault;
 
-use axum::Router;
 use crate::state::AppState;
+use axum::Router;
 
 pub fn routes() -> Router<AppState> {
     Router::new()

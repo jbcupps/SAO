@@ -53,22 +53,18 @@ async fn register_start(
     };
 
     // Get existing credential IDs for exclusion
-    let existing_creds = match crate::db::webauthn::get_credentials_for_user(
-        &state.inner.db,
-        user.id,
-    )
-    .await
-    {
-        Ok(creds) => creds
-            .into_iter()
-            .filter_map(|c| {
-                serde_json::from_value::<Passkey>(c.credential_json)
-                    .ok()
-                    .map(|pk| pk.cred_id().clone())
-            })
-            .collect::<Vec<_>>(),
-        Err(_) => vec![],
-    };
+    let existing_creds =
+        match crate::db::webauthn::get_credentials_for_user(&state.inner.db, user.id).await {
+            Ok(creds) => creds
+                .into_iter()
+                .filter_map(|c| {
+                    serde_json::from_value::<Passkey>(c.credential_json)
+                        .ok()
+                        .map(|pk| pk.cred_id().clone())
+                })
+                .collect::<Vec<_>>(),
+            Err(_) => vec![],
+        };
 
     let display_name = user.display_name.as_deref().unwrap_or(&user.username);
     match crate::auth::webauthn::start_registration(
@@ -124,26 +120,22 @@ async fn register_finish(
     Json(req): Json<RegisterFinishRequest>,
 ) -> (StatusCode, Json<Value>) {
     // Retrieve challenge state
-    let (challenge_json, user_id) = match crate::db::webauthn::consume_challenge(
-        &state.inner.db,
-        &req.challenge_id,
-    )
-    .await
-    {
-        Ok(Some(data)) => data,
-        Ok(None) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "Invalid or expired challenge" })),
-            );
-        }
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": e.to_string() })),
-            );
-        }
-    };
+    let (challenge_json, user_id) =
+        match crate::db::webauthn::consume_challenge(&state.inner.db, &req.challenge_id).await {
+            Ok(Some(data)) => data,
+            Ok(None) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": "Invalid or expired challenge" })),
+                );
+            }
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": e.to_string() })),
+                );
+            }
+        };
 
     let user_id = match user_id {
         Some(id) => id,
@@ -232,20 +224,16 @@ async fn login_start(
     };
 
     // Load user's passkeys
-    let cred_rows = match crate::db::webauthn::get_credentials_for_user(
-        &state.inner.db,
-        user.id,
-    )
-    .await
-    {
-        Ok(rows) => rows,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": e.to_string() })),
-            );
-        }
-    };
+    let cred_rows =
+        match crate::db::webauthn::get_credentials_for_user(&state.inner.db, user.id).await {
+            Ok(rows) => rows,
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": e.to_string() })),
+                );
+            }
+        };
 
     if cred_rows.is_empty() {
         return (
@@ -304,26 +292,22 @@ async fn login_finish(
     State(state): State<AppState>,
     Json(req): Json<LoginFinishRequest>,
 ) -> (StatusCode, Json<Value>) {
-    let (challenge_json, user_id) = match crate::db::webauthn::consume_challenge(
-        &state.inner.db,
-        &req.challenge_id,
-    )
-    .await
-    {
-        Ok(Some(data)) => data,
-        Ok(None) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "Invalid or expired challenge" })),
-            );
-        }
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": e.to_string() })),
-            );
-        }
-    };
+    let (challenge_json, user_id) =
+        match crate::db::webauthn::consume_challenge(&state.inner.db, &req.challenge_id).await {
+            Ok(Some(data)) => data,
+            Ok(None) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": "Invalid or expired challenge" })),
+                );
+            }
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": e.to_string() })),
+                );
+            }
+        };
 
     let user_id = match user_id {
         Some(id) => id,
@@ -446,26 +430,22 @@ async fn refresh_token(
 ) -> (StatusCode, Json<Value>) {
     let token_hash = session::hash_refresh_token(&req.refresh_token);
 
-    let user_id = match crate::db::sessions::validate_refresh_token(
-        &state.inner.db,
-        &token_hash,
-    )
-    .await
-    {
-        Ok(Some(uid)) => uid,
-        Ok(None) => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({ "error": "Invalid or expired refresh token" })),
-            );
-        }
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": e.to_string() })),
-            );
-        }
-    };
+    let user_id =
+        match crate::db::sessions::validate_refresh_token(&state.inner.db, &token_hash).await {
+            Ok(Some(uid)) => uid,
+            Ok(None) => {
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({ "error": "Invalid or expired refresh token" })),
+                );
+            }
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": e.to_string() })),
+                );
+            }
+        };
 
     // Revoke old refresh token
     let _ = crate::db::sessions::revoke_refresh_token(&state.inner.db, &token_hash).await;
@@ -501,9 +481,13 @@ async fn refresh_token(
     let new_hash = session::hash_refresh_token(&new_refresh);
     let refresh_expires = Utc::now() + Duration::days(7);
 
-    if let Err(e) =
-        crate::db::sessions::store_refresh_token(&state.inner.db, user.id, &new_hash, refresh_expires)
-            .await
+    if let Err(e) = crate::db::sessions::store_refresh_token(
+        &state.inner.db,
+        user.id,
+        &new_hash,
+        refresh_expires,
+    )
+    .await
     {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,

@@ -1,4 +1,4 @@
-﻿use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// An entry in the global config representing a registered agent.
@@ -160,5 +160,3 @@ mod tests {
         let _ = fs::remove_dir_all(&tmp);
     }
 }
-
-

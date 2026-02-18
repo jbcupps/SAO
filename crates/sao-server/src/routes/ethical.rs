@@ -1,6 +1,6 @@
+use crate::state::AppState;
 use axum::{routing::post, Json, Router};
 use serde_json::{json, Value};
-use crate::state::AppState;
 
 pub fn routes() -> Router<AppState> {
     Router::new().route("/api/ethical/evaluate", post(evaluate))

@@ -45,7 +45,8 @@ async fn main() -> anyhow::Result<()> {
         .allow_headers(Any);
 
     // Static file serving for the React SPA
-    let static_dir = std::env::var("SAO_STATIC_DIR").unwrap_or_else(|_| "frontend/dist".to_string());
+    let static_dir =
+        std::env::var("SAO_STATIC_DIR").unwrap_or_else(|_| "frontend/dist".to_string());
     let spa_fallback = ServeDir::new(&static_dir)
         .not_found_service(ServeFile::new(format!("{}/index.html", static_dir)));
 
