@@ -58,12 +58,11 @@ pub async fn list_users(pool: &PgPool) -> Result<Vec<UserRow>, sqlx::Error> {
 }
 
 pub async fn update_user_role(pool: &PgPool, id: Uuid, role: &str) -> Result<bool, sqlx::Error> {
-    let result =
-        sqlx::query("UPDATE users SET role = $1, updated_at = now() WHERE id = $2")
-            .bind(role)
-            .bind(id)
-            .execute(pool)
-            .await?;
+    let result = sqlx::query("UPDATE users SET role = $1, updated_at = now() WHERE id = $2")
+        .bind(role)
+        .bind(id)
+        .execute(pool)
+        .await?;
     Ok(result.rows_affected() > 0)
 }
 
@@ -75,6 +74,7 @@ pub async fn delete_user(pool: &PgPool, id: Uuid) -> Result<bool, sqlx::Error> {
     Ok(result.rows_affected() > 0)
 }
 
+#[allow(dead_code)]
 pub async fn user_count(pool: &PgPool) -> Result<i64, sqlx::Error> {
     let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users")
         .fetch_one(pool)

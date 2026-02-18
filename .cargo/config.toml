@@ -2,7 +2,11 @@
 rustflags = ["-Ctarget-feature=+crt-static"]
 
 [env]
+# MSVC linker library paths (ignored on non-Windows targets)
 LIB = { value = "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\lib\\x64;C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.26100.0\\ucrt\\x64;C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.26100.0\\um\\x64", force = true }
-OPENSSL_DIR = { value = "C:\\Program Files\\OpenSSL-Win64", force = true }
-OPENSSL_LIB_DIR = { value = "C:\\Program Files\\OpenSSL-Win64\\lib\\VC\\x64\\MT", force = true }
-OPENSSL_STATIC = { value = "1", force = true }
+# OpenSSL env vars are set via system environment on Windows, not here,
+# because openssl-sys panics if the paths don't exist (breaks Linux CI).
+# Set these in your shell or system env on Windows:
+#   OPENSSL_DIR=C:\Program Files\OpenSSL-Win64
+#   OPENSSL_LIB_DIR=C:\Program Files\OpenSSL-Win64\lib\VC\x64\MT
+#   OPENSSL_STATIC=1

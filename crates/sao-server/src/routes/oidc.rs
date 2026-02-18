@@ -62,7 +62,9 @@ async fn authorize(
         if let Some(vmk) = vs.vmk() {
             if encrypted.len() > 12 {
                 let (ct, nonce) = encrypted.split_at(encrypted.len() - 12);
-                vmk.decrypt(ct, nonce).ok().and_then(|b| String::from_utf8(b).ok())
+                vmk.decrypt(ct, nonce)
+                    .ok()
+                    .and_then(|b| String::from_utf8(b).ok())
             } else {
                 None
             }
@@ -73,7 +75,8 @@ async fn authorize(
         None
     };
 
-    let rp_origin = std::env::var("SAO_RP_ORIGIN").unwrap_or_else(|_| "http://localhost:3100".to_string());
+    let rp_origin =
+        std::env::var("SAO_RP_ORIGIN").unwrap_or_else(|_| "http://localhost:3100".to_string());
     let redirect_url = format!("{}/api/auth/oidc/callback", rp_origin);
 
     let config = crate::auth::oidc::OidcProviderConfig {
@@ -125,26 +128,22 @@ async fn callback(
     Query(query): Query<CallbackQuery>,
 ) -> (StatusCode, Json<Value>) {
     // Retrieve and validate CSRF state
-    let (state_json, _) = match crate::db::webauthn::consume_challenge(
-        &state.inner.db,
-        &query.state,
-    )
-    .await
-    {
-        Ok(Some(data)) => data,
-        Ok(None) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "Invalid or expired OIDC state" })),
-            );
-        }
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": e.to_string() })),
-            );
-        }
-    };
+    let (state_json, _) =
+        match crate::db::webauthn::consume_challenge(&state.inner.db, &query.state).await {
+            Ok(Some(data)) => data,
+            Ok(None) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": "Invalid or expired OIDC state" })),
+                );
+            }
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": e.to_string() })),
+                );
+            }
+        };
 
     let provider_id: Uuid = match state_json.get("provider_id").and_then(|v| v.as_str()) {
         Some(id) => match Uuid::parse_str(id) {
@@ -181,7 +180,9 @@ async fn callback(
         if let Some(vmk) = vs.vmk() {
             if encrypted.len() > 12 {
                 let (ct, nonce) = encrypted.split_at(encrypted.len() - 12);
-                vmk.decrypt(ct, nonce).ok().and_then(|b| String::from_utf8(b).ok())
+                vmk.decrypt(ct, nonce)
+                    .ok()
+                    .and_then(|b| String::from_utf8(b).ok())
             } else {
                 None
             }
@@ -192,7 +193,8 @@ async fn callback(
         None
     };
 
-    let rp_origin = std::env::var("SAO_RP_ORIGIN").unwrap_or_else(|_| "http://localhost:3100".to_string());
+    let rp_origin =
+        std::env::var("SAO_RP_ORIGIN").unwrap_or_else(|_| "http://localhost:3100".to_string());
     let redirect_url = format!("{}/api/auth/oidc/callback", rp_origin);
 
     let config = crate::auth::oidc::OidcProviderConfig {
@@ -205,72 +207,67 @@ async fn callback(
     };
 
     // Exchange code for tokens
-    let user_info = match crate::auth::oidc::exchange_code(&config, &redirect_url, &query.code).await {
-        Ok(info) => info,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": e })),
-            );
-        }
-    };
+    let user_info =
+        match crate::auth::oidc::exchange_code(&config, &redirect_url, &query.code).await {
+            Ok(info) => info,
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": e })),
+                );
+            }
+        };
 
     // Find or create user
-    let user_id = match crate::db::oidc::find_user_by_oidc(
-        &state.inner.db,
-        provider_id,
-        &user_info.subject,
-    )
-    .await
-    {
-        Ok(Some(uid)) => uid,
-        Ok(None) => {
-            // Create new user from OIDC info
-            let username = user_info
-                .email
-                .as_deref()
-                .unwrap_or(&user_info.subject);
-            let display_name = user_info.name.as_deref().or(user_info.email.as_deref());
-
-            let uid = match crate::db::users::create_user(
-                &state.inner.db,
-                username,
-                display_name,
-                "user",
-            )
+    let user_id =
+        match crate::db::oidc::find_user_by_oidc(&state.inner.db, provider_id, &user_info.subject)
             .await
-            {
-                Ok(id) => id,
-                Err(e) => {
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({ "error": format!("Failed to create user: {}", e) })),
-                    );
+        {
+            Ok(Some(uid)) => uid,
+            Ok(None) => {
+                // Create new user from OIDC info
+                let username = user_info.email.as_deref().unwrap_or(&user_info.subject);
+                let display_name = user_info.name.as_deref().or(user_info.email.as_deref());
+
+                let uid = match crate::db::users::create_user(
+                    &state.inner.db,
+                    username,
+                    display_name,
+                    "user",
+                )
+                .await
+                {
+                    Ok(id) => id,
+                    Err(e) => {
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(json!({ "error": format!("Failed to create user: {}", e) })),
+                        );
+                    }
+                };
+
+                // Link OIDC identity
+                if let Err(e) = crate::db::oidc::link_user_to_oidc(
+                    &state.inner.db,
+                    uid,
+                    provider_id,
+                    &user_info.subject,
+                    user_info.email.as_deref(),
+                )
+                .await
+                {
+                    tracing::error!("Failed to link OIDC identity: {}", e);
                 }
-            };
 
-            // Link OIDC identity
-            if let Err(e) = crate::db::oidc::link_user_to_oidc(
-                &state.inner.db,
-                uid,
-                provider_id,
-                &user_info.subject,
-                user_info.email.as_deref(),
-            )
-            .await
-            {
-                tracing::error!("Failed to link OIDC identity: {}", e);
+                uid
             }
-
-            uid
-        }
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": e.to_string() })),
-            );
-        }
-    };
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": e.to_string() })),
+                );
+            }
+        };
 
     // Load user for JWT
     let user = match crate::db::users::get_user_by_id(&state.inner.db, user_id).await {

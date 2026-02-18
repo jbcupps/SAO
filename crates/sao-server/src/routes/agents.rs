@@ -18,10 +18,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/agents/{id}", delete(delete_agent_handler))
 }
 
-async fn list_agents(
-    _user: AuthUser,
-    State(state): State<AppState>,
-) -> Json<Value> {
+async fn list_agents(_user: AuthUser, State(state): State<AppState>) -> Json<Value> {
     match crate::db::agents::list_agents(&state.inner.db).await {
         Ok(agents) => Json(json!({ "agents": agents })),
         Err(e) => Json(json!({ "error": e.to_string() })),

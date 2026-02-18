@@ -2,6 +2,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 #[derive(Debug, sqlx::FromRow)]
+#[allow(dead_code)]
 pub struct WebauthnCredentialRow {
     pub id: i32,
     pub user_id: Uuid,
@@ -46,6 +47,7 @@ pub async fn get_credentials_for_user(
 }
 
 /// Update credential's last_used_at timestamp.
+#[allow(dead_code)]
 pub async fn touch_credential(pool: &PgPool, credential_id: &str) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE webauthn_credentials SET last_used_at = now() WHERE credential_id = $1")
         .bind(credential_id)

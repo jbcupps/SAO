@@ -21,7 +21,10 @@ pub fn routes() -> Router<AppState> {
         .route("/api/admin/oidc/providers", post(create_oidc_provider))
         .route("/api/admin/oidc/providers", get(list_oidc_providers))
         .route("/api/admin/oidc/providers/{id}", put(update_oidc_provider))
-        .route("/api/admin/oidc/providers/{id}", delete(delete_oidc_provider))
+        .route(
+            "/api/admin/oidc/providers/{id}",
+            delete(delete_oidc_provider),
+        )
         // Audit log (admin only)
         .route("/api/admin/audit", get(query_audit_log))
 }

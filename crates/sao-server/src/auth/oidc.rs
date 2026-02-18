@@ -5,6 +5,7 @@ use openidconnect::{
 };
 
 /// OIDC provider configuration loaded from DB.
+#[allow(dead_code)]
 pub struct OidcProviderConfig {
     pub id: uuid::Uuid,
     pub name: String,
@@ -38,10 +39,9 @@ pub async fn start_authorization(
     let issuer_url = IssuerUrl::new(config.issuer_url.clone())
         .map_err(|e| format!("Invalid issuer URL: {}", e))?;
 
-    let provider_metadata =
-        CoreProviderMetadata::discover_async(issuer_url, &http_client)
-            .await
-            .map_err(|e| format!("OIDC discovery failed: {}", e))?;
+    let provider_metadata = CoreProviderMetadata::discover_async(issuer_url, &http_client)
+        .await
+        .map_err(|e| format!("OIDC discovery failed: {}", e))?;
 
     let client_id = ClientId::new(config.client_id.clone());
     let client_secret = config
@@ -91,10 +91,9 @@ pub async fn exchange_code(
     let issuer_url = IssuerUrl::new(config.issuer_url.clone())
         .map_err(|e| format!("Invalid issuer URL: {}", e))?;
 
-    let provider_metadata =
-        CoreProviderMetadata::discover_async(issuer_url, &http_client)
-            .await
-            .map_err(|e| format!("OIDC discovery failed: {}", e))?;
+    let provider_metadata = CoreProviderMetadata::discover_async(issuer_url, &http_client)
+        .await
+        .map_err(|e| format!("OIDC discovery failed: {}", e))?;
 
     let client_id = ClientId::new(config.client_id.clone());
     let client_secret = config
@@ -120,9 +119,7 @@ pub async fn exchange_code(
         .map_err(|e| format!("Token exchange failed: {}", e))?;
 
     // Extract ID token claims
-    let id_token = token_response
-        .id_token()
-        .ok_or("No ID token in response")?;
+    let id_token = token_response.id_token().ok_or("No ID token in response")?;
 
     // Verify token - skip nonce verification for now (stored in DB challenge)
     let claims = id_token

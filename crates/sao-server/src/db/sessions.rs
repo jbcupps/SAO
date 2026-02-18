@@ -8,14 +8,12 @@ pub async fn store_refresh_token(
     token_hash: &str,
     expires_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)",
-    )
-    .bind(user_id)
-    .bind(token_hash)
-    .bind(expires_at)
-    .execute(pool)
-    .await?;
+    sqlx::query("INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)")
+        .bind(user_id)
+        .bind(token_hash)
+        .bind(expires_at)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -44,6 +42,7 @@ pub async fn revoke_refresh_token(pool: &PgPool, token_hash: &str) -> Result<(),
 }
 
 /// Revoke all refresh tokens for a user.
+#[allow(dead_code)]
 pub async fn revoke_all_user_tokens(pool: &PgPool, user_id: Uuid) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE refresh_tokens SET revoked = true WHERE user_id = $1")
         .bind(user_id)

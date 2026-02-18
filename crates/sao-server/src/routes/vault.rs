@@ -90,10 +90,7 @@ async fn unseal_vault(
     }
 }
 
-async fn seal_vault(
-    _user: AuthUser,
-    State(state): State<AppState>,
-) -> Json<Value> {
+async fn seal_vault(_user: AuthUser, State(state): State<AppState>) -> Json<Value> {
     let mut vs = state.inner.vault_state.write().await;
     if vs.is_unsealed() {
         *vs = crate::vault_state::VaultState::Sealed;
@@ -171,10 +168,7 @@ async fn create_secret(
     }
 }
 
-async fn list_secrets(
-    user: AuthUser,
-    State(state): State<AppState>,
-) -> (StatusCode, Json<Value>) {
+async fn list_secrets(user: AuthUser, State(state): State<AppState>) -> (StatusCode, Json<Value>) {
     // Users see only their own secrets; admins see all
     let owner_filter = if user.is_admin() {
         None
@@ -224,13 +218,11 @@ async fn get_secret(
     };
 
     // Ownership check: non-admins can only access their own secrets
-    if !user.is_admin() {
-        if secret.owner_user_id != Some(user.user_id) {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({ "error": "Access denied" })),
-            );
-        }
+    if !user.is_admin() && secret.owner_user_id != Some(user.user_id) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "Access denied" })),
+        );
     }
 
     let _ = crate::db::audit::insert_audit_log(

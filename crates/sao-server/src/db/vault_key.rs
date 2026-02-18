@@ -1,6 +1,7 @@
 use sqlx::PgPool;
 
 #[derive(Debug, sqlx::FromRow)]
+#[allow(dead_code)]
 pub struct VaultMasterKeyRow {
     pub id: i32,
     pub encrypted_key: Vec<u8>,

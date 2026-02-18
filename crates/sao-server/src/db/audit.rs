@@ -1,6 +1,7 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
+#[allow(clippy::too_many_arguments)]
 pub async fn insert_audit_log(
     pool: &PgPool,
     user_id: Option<Uuid>,

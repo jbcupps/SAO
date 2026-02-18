@@ -26,6 +26,7 @@ pub struct VaultSecretMetadataRow {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn create_secret(
     pool: &PgPool,
     owner_user_id: Option<Uuid>,
@@ -74,10 +75,7 @@ pub async fn list_secrets_metadata(
     }
 }
 
-pub async fn get_secret(
-    pool: &PgPool,
-    id: Uuid,
-) -> Result<Option<VaultSecretRow>, sqlx::Error> {
+pub async fn get_secret(pool: &PgPool, id: Uuid) -> Result<Option<VaultSecretRow>, sqlx::Error> {
     sqlx::query_as::<_, VaultSecretRow>(
         "SELECT id, owner_user_id, secret_type, label, provider, ciphertext, nonce, metadata, created_at, updated_at \
          FROM vault_secrets WHERE id = $1",
@@ -113,7 +111,7 @@ pub async fn update_secret(
         updates.push(format!("metadata = ${}", param_idx));
         param_idx += 1;
     }
-    updates.push(format!("updated_at = now()"));
+    updates.push("updated_at = now()".to_string());
 
     let sql = format!(
         "UPDATE vault_secrets SET {} WHERE id = ${}",

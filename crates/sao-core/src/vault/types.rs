@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::str::FromStr;
 
 /// Types of secrets stored in the vault.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -21,15 +23,25 @@ impl SecretType {
             Self::Other => "other",
         }
     }
+}
 
-    pub fn from_str(s: &str) -> Self {
-        match s {
+impl fmt::Display for SecretType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for SecretType {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
             "ed25519" => Self::Ed25519,
             "api_key" => Self::ApiKey,
             "gpg" => Self::Gpg,
             "oauth_token" => Self::OauthToken,
             _ => Self::Other,
-        }
+        })
     }
 }
 

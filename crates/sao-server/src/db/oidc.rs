@@ -21,7 +21,9 @@ pub struct OidcProviderPublicRow {
     pub enabled: bool,
 }
 
-pub async fn list_providers_public(pool: &PgPool) -> Result<Vec<OidcProviderPublicRow>, sqlx::Error> {
+pub async fn list_providers_public(
+    pool: &PgPool,
+) -> Result<Vec<OidcProviderPublicRow>, sqlx::Error> {
     sqlx::query_as::<_, OidcProviderPublicRow>(
         "SELECT id, name, enabled FROM oidc_providers WHERE enabled = true ORDER BY name",
     )
@@ -70,6 +72,7 @@ pub async fn create_provider(
     Ok(row.0)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn update_provider(
     pool: &PgPool,
     id: Uuid,

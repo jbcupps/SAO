@@ -11,6 +11,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -21,17 +24,17 @@ jobs:
       - name: Check formatting
         run: cargo fmt --check
 
-      - name: Clippy (default features)
+      - name: Clippy
         run: cargo clippy --workspace -- -D warnings
-
-      - name: Clippy (postgres feature)
-        run: cargo clippy --workspace --features postgres -- -D warnings
 
   test:
     name: Test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -61,6 +64,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
@@ -69,4 +75,4 @@ jobs:
       - name: Run tests with postgres
         env:
           DATABASE_URL: postgres://sao:sao@localhost:5432/sao_test
-        run: cargo test --workspace --features postgres
+        run: cargo test --workspace

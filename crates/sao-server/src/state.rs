@@ -15,6 +15,7 @@ pub struct AppState {
     pub inner: Arc<AppStateInner>,
 }
 
+#[allow(dead_code)]
 pub struct AppStateInner {
     pub identity_manager: Arc<IdentityManager>,
     pub active_agent_id: std::sync::RwLock<Option<String>>,
@@ -46,12 +47,10 @@ pub fn init_app_state(
 ) -> AppState {
     let data_root = default_data_root();
 
-    let identity_manager = Arc::new(
-        IdentityManager::new(data_root.clone()).unwrap_or_else(|e| {
-            tracing::error!("Failed to initialize IdentityManager: {}", e);
-            panic!("IdentityManager initialization failed: {}", e);
-        }),
-    );
+    let identity_manager = Arc::new(IdentityManager::new(data_root.clone()).unwrap_or_else(|e| {
+        tracing::error!("Failed to initialize IdentityManager: {}", e);
+        panic!("IdentityManager initialization failed: {}", e);
+    }));
 
     let (ws_tx, _) = tokio::sync::broadcast::channel::<WsEvent>(256);
 
