@@ -11,6 +11,28 @@ SAO is the management layer in the AI Ethical Stack:
 - **Ethical_AI_Reg** - The ethical framework (how alignment is *measured*)
 - **Phoenix** - The coordination point (how the effort is *tracked*)
 
+## Ecosystem Role & Alignment
+
+This repository is one piece of a deliberate three-part identity ecosystem (see [sao-ecosystem-article.md](https://github.com/jbcupps/SAO/blob/main/sao-ecosystem-article.md) and diagrams below).
+
+- **Abigail** – personal local agent with full free will (owner-controlled keys).
+- **Orion Dock** – enterprise container agents (same soul + skills model, SAO-provisioned).
+- **SAO** – central management, cryptographic vault, agent registry, enterprise IDP bridge.
+
+**Agent Soul Contract**
+Every running agent instance carries the same archetype:
+- `soul.md` + `ethics.md` + `org-map.md`
+- Merged at birth into the runtime system prompt.
+- Skills always split: **tool** (code/env) + **how-to-use.md** (ego guidance).
+
+**Visual References** (embed these in the repo or link):
+- Modular Crate Architecture (Orion)
+- Birth Lifecycle
+- Bicameral Mind / IdEgo Router
+- Zero Trust Security Model
+- Autonomous Execution Loop
+- SAO Trust Chain & Ecosystem Overview
+
 ## Crates
 
 | Crate | Purpose |
