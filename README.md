@@ -33,6 +33,19 @@ Every running agent instance carries the same archetype:
 - Autonomous Execution Loop
 - SAO Trust Chain & Ecosystem Overview
 
+## Provisioning Flow
+
+SAO acts as the badge-issuer for the entire agent ecosystem. See the [SAO Trust Chain & Ecosystem Overview](https://github.com/jbcupps/SAO/blob/main/sao-ecosystem-article.md) for the full diagram.
+
+1. **Agent Registration** – A new agent (Abigail local or Orion container) calls `POST /api/agents` with its public key.
+2. **Master Key Signing** – SAO signs the agent's public key with the master Ed25519 key, producing a verifiable trust chain.
+3. **Soul Injection** – SAO provisions the agent with its `soul.md`, `ethics.md`, and `org-map.md` templates (see [Agent Archetype](docs/agent_archetype.md)).
+4. **Key Provisioning** – The agent receives its assigned API keys and secrets from the vault, encrypted in transit.
+5. **Hive Assignment** – Enterprise agents (Orion) are assigned to a hive, inheriting shared permissions and key sets.
+6. **Birth Confirmation** – SAO records the birth event in the audit log and broadcasts it over WebSocket to connected agents.
+
+For details on how the vault and registry handle identity signing and org-map injection, see [docs/VAULT_AND_REGISTRY.md](docs/VAULT_AND_REGISTRY.md).
+
 ## Crates
 
 | Crate | Purpose |
