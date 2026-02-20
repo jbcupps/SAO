@@ -21,7 +21,8 @@ This repository is one piece of a deliberate three-part identity ecosystem (see 
 
 **Agent Soul Contract**
 Every running agent instance carries the same archetype:
-- `soul.md` + `ethics.md` + `org-map.md`
+- `soul.md` + `ethics.md` + `org-map.md` + **`personality.md`**
+- `personality.md` is the only evolvable ego document; all other files are immutable after birth.
 - Merged at birth into the runtime system prompt.
 - Skills always split: **tool** (code/env) + **how-to-use.md** (ego guidance).
 
@@ -39,7 +40,7 @@ SAO acts as the badge-issuer for the entire agent ecosystem. See the [SAO Trust 
 
 1. **Agent Registration** – A new agent (Abigail local or Orion container) calls `POST /api/agents` with its public key.
 2. **Master Key Signing** – SAO signs the agent's public key with the master Ed25519 key, producing a verifiable trust chain.
-3. **Soul Injection** – SAO provisions the agent with its `soul.md`, `ethics.md`, and `org-map.md` templates (see [Agent Archetype](docs/agent_archetype.md)).
+3. **Soul Injection** – SAO provisions the agent with its `soul.md`, `ethics.md`, `org-map.md`, and `personality.md` templates (see [Agent Archetype](docs/agent_archetype.md)). `personality.md` is the only evolvable ego document; all other files are immutable after birth.
 4. **Key Provisioning** – The agent receives its assigned API keys and secrets from the vault, encrypted in transit.
 5. **Hive Assignment** – Enterprise agents (Orion) are assigned to a hive, inheriting shared permissions and key sets.
 6. **Birth Confirmation** – SAO records the birth event in the audit log and broadcasts it over WebSocket to connected agents.
