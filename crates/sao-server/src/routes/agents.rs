@@ -78,6 +78,7 @@ async fn create_agent(
             .await;
             let ethic_preview =
                 sao_core::ethical_bridge::get_triangleethic_preview(&identity_agent_id);
+            crate::db::audit::log_birth_event(&identity_agent_id);
             Json(json!({
                 "status": "READY",
                 "documents": ["soul.md", "ethics.md", "org-map.md", "personality.md"],
