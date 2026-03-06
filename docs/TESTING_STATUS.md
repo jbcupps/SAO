@@ -3,3 +3,9 @@
 - Local Docker test passed
 - GET /api/agents/{id} JSON: {"agent_id":"test123","documents":["soul.md","ethics.md","org-map.md","personality.md"],"last_heartbeat":"just now","personality_preview":"ego traits (editable by Superego only)","soul_immutable":true,"status":"READY"}
 - Status: PASS
+
+## Chunk 4 Verification - 05 March 2026
+- Codex CLI changes applied (TriangleEthic stub in birth flow)
+- Local Docker test passed
+- triangleethic_preview JSON: {"areteological":87,"deontological":92,"dual_welfare":"AI sentient = human (balanced)","memetic_fitness":0.94,"teleological":95}
+- Status: PASS
