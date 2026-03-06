@@ -76,11 +76,14 @@ async fn create_agent(
                 None,
             )
             .await;
+            let ethic_preview =
+                sao_core::ethical_bridge::get_triangleethic_preview(&identity_agent_id);
             Json(json!({
                 "status": "READY",
                 "documents": ["soul.md", "ethics.md", "org-map.md", "personality.md"],
                 "soul_immutable": true,
                 "personality_preview": "default ego traits loaded — Superego will evolve this later",
+                "triangleethic_preview": ethic_preview,
             }))
         }
         Err(e) => {
