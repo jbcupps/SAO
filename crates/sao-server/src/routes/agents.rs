@@ -28,33 +28,61 @@ async fn list_agents(_user: AuthUser, State(state): State<AppState>) -> Json<Val
 #[derive(Deserialize)]
 struct CreateAgentRequest {
     name: String,
+    #[serde(rename = "type", default)]
+    agent_type: Option<String>,
+    #[serde(default)]
+    pubkey: Option<String>,
 }
 
 async fn create_agent(
-    user: AuthUser,
     State(state): State<AppState>,
     Json(req): Json<CreateAgentRequest>,
 ) -> Json<Value> {
+    let (identity_agent_id, agent_dir) = match state.inner.identity_manager.create_agent(&req.name) {
+        Ok(result) => result,
+        Err(e) => return Json(json!({ "error": e })),
+    };
+
+    if let Err(e) = state.inner.identity_manager.create_birth_documents(
+        &identity_agent_id,
+        &agent_dir,
+        &req.name,
+        req.agent_type.as_deref(),
+        req.pubkey.as_deref(),
+    ) {
+        let _ = state.inner.identity_manager.remove_agent(&identity_agent_id);
+        let _ = std::fs::remove_dir_all(&agent_dir);
+        return Json(json!({ "error": e }));
+    }
+
     match crate::db::agents::create_agent(&state.inner.db, &req.name).await {
-        Ok(agent) => {
+        Ok(_agent) => {
             let _ = crate::db::audit::insert_audit_log(
                 &state.inner.db,
-                Some(user.user_id),
+                None,
                 None,
                 "agents.create",
                 Some("agent"),
-                Some(json!({ "agent_id": agent.id, "name": agent.name })),
+                Some(json!({
+                    "name": req.name,
+                    "identity_agent_id": identity_agent_id,
+                    "documents": ["soul.md", "ethics.md", "org-map.md", "personality.md"],
+                })),
                 None,
                 None,
             )
             .await;
             Json(json!({
-                "id": agent.id,
-                "name": agent.name,
-                "state": agent.state,
+                "status": "READY",
+                "documents": ["soul.md", "ethics.md", "org-map.md", "personality.md"],
+                "soul_immutable": true,
             }))
         }
-        Err(e) => Json(json!({ "error": e.to_string() })),
+        Err(e) => {
+            let _ = state.inner.identity_manager.remove_agent(&identity_agent_id);
+            let _ = std::fs::remove_dir_all(&agent_dir);
+            Json(json!({ "error": e.to_string() }))
+        }
     }
 }
 

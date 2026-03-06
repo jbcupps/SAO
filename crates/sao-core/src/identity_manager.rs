@@ -1,7 +1,8 @@
 use crate::{
     generate_master_key, load_master_key, verify_agent_signature, AgentEntry, GlobalConfig,
 };
-use ed25519_dalek::{SigningKey, VerifyingKey};
+use base64::Engine;
+use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
@@ -208,6 +209,80 @@ impl IdentityManager {
         Ok((uuid, agent_dir))
     }
 
+    /// Create the four signed birth documents for a new agent.
+    pub fn create_birth_documents(
+        &self,
+        agent_id: &str,
+        agent_dir: &Path,
+        name: &str,
+        agent_type: Option<&str>,
+        pubkey: Option<&str>,
+    ) -> Result<(), String> {
+        let created_at = chrono::Utc::now().to_rfc3339();
+        let agent_type = agent_type.unwrap_or("personal");
+        let pubkey = pubkey.unwrap_or("unspecified");
+
+        let soul = format!(
+            "# IMMUTABLE CONSTITUTIONAL ROOT — DO NOT MODIFY\n\n\
+<!-- sao-signature: {signature} -->\n\n\
+Agent ID: {agent_id}\n\
+Name: {name}\n\
+Created At: {created_at}\n\
+Purpose: foundational identity and continuity.\n",
+            signature = self.document_signature(format!(
+                "soul.md\n{agent_id}\n{name}\n{created_at}"
+            )),
+            agent_id = agent_id,
+            name = name,
+            created_at = created_at,
+        );
+
+        let ethics_body = format!(
+            "# ethics.md\n\n\
+TriangleEthic commitments apply to {name}.\n\
+Created At: {created_at}\n"
+        );
+        let ethics = format!(
+            "<!-- sao-signature: {} -->\n\n{}",
+            self.document_signature(&ethics_body),
+            ethics_body
+        );
+
+        let org_map_body = format!(
+            "# org-map.md\n\n\
+agent_id: {agent_id}\n\
+name: {name}\n\
+type: {agent_type}\n\
+pubkey: {pubkey}\n\
+reports_to: SAO registry\n"
+        );
+        let org_map = format!(
+            "<!-- sao-signature: {} -->\n\n{}",
+            self.document_signature(&org_map_body),
+            org_map_body
+        );
+
+        let personality_body = format!(
+            "# personality.md\n\n\
+name: {name}\n\
+style: grounded\n\
+tone: precise\n\
+mutability: evolvable\n"
+        );
+        let personality = format!(
+            "<!-- sao-signature: {} -->\n\n{}",
+            self.document_signature(&personality_body),
+            personality_body
+        );
+
+        self.write_birth_document(agent_dir, "soul.md", &soul, true)?;
+        self.write_birth_document(agent_dir, "ethics.md", &ethics, false)?;
+        self.write_birth_document(agent_dir, "org-map.md", &org_map, false)?;
+        self.write_birth_document(agent_dir, "personality.md", &personality, false)?;
+
+        Ok(())
+    }
+
     /// Get the agent directory path for a given UUID.
     pub fn agent_dir(&self, agent_id: &str) -> Result<PathBuf, String> {
         let gc = self.global_config.read().map_err(|e| e.to_string())?;
@@ -251,5 +326,34 @@ impl IdentityManager {
             .read()
             .map(|gc| !gc.agents.is_empty())
             .unwrap_or(false)
+    }
+
+    /// Modify an existing agent document, except for soul.md which is immutable.
+    pub fn modify_agent_document(
+        &self,
+        agent_id: &str,
+        file_name: &str,
+        contents: &str,
+    ) -> Result<(), String> {
+        if file_name.contains("soul.md") { return Err("soul.md is constitutionally immutable".into()); }
+        let agent_dir = self.agent_dir(agent_id)?;
+        self.write_birth_document(&agent_dir, file_name, contents, false)
+    }
+
+    fn document_signature(&self, contents: impl AsRef<[u8]>) -> String {
+        let signature = self.master_key.sign(contents.as_ref()).to_bytes();
+        base64::engine::general_purpose::STANDARD.encode(signature)
+    }
+
+    fn write_birth_document(
+        &self,
+        agent_dir: &Path,
+        file_name: &str,
+        contents: &str,
+        _readonly: bool,
+    ) -> Result<(), String> {
+        let path = agent_dir.join(file_name);
+        std::fs::write(&path, contents).map_err(|e| e.to_string())?;
+        Ok(())
     }
 }
