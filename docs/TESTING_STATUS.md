@@ -15,3 +15,9 @@
 - Local Docker test passed
 - Audit log line: 2026-03-06T02:56:44.529797Z  INFO sao_server::db::audit: AUDIT: Agent cfb63962-273d-4e40-be1d-8cf3cfb90b07 born with immutable soul.md + TriangleEthic preview
 - Status: PASS
+
+## Chunk 6 Verification - 05 March 2026
+- Codex CLI changes applied (periodic Superego roll-up in heartbeat)
+- Local Docker test passed
+- Roll-up log line: 2026-03-06T03:08:56.569092Z  INFO sao_server::ws: Superego roll-up: Periodic Superego roll-up for test123: personality tweak queued (soul.md untouched)
+- Status: PASS
