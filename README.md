@@ -22,6 +22,7 @@ Target-state architecture notes in `documents/` and older ecosystem writeups des
 - Axum server on `http://localhost:3100`
 - PostgreSQL-backed control-plane state
 - `POST /api/agents` birth flow returning a `READY` summary
+- initial setup flow that provisions an SAO admin entity and seeds tracked bootstrap work items
 - local identity directories under `SAO_DATA_DIR/identities/<agent_id>/`
 - agent WebSocket endpoint at `ws://localhost:3100/ws/agent/<agent_id>`
 - health, setup, auth, OIDC, admin, and vault server surfaces that support the control plane
@@ -45,6 +46,15 @@ Current response shape:
   "soul_immutable": true
 }
 ```
+
+## Initial Setup
+
+Current first-run setup behavior:
+
+1. `POST /api/setup/initialize` seals the vault master key and creates the initial admin user.
+2. SAO provisions an `sao_admin_entity` identity tied to the configured frontier model credential.
+3. The setup flow seeds an initial work queue for getting SAO out of local Docker and into Azure container hosting.
+4. The highest-priority work item is the AZForge-to-Azure-container IaC track, followed by durable state, database, secret, origin, and container release tasks.
 
 Document roles:
 

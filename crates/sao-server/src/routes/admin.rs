@@ -25,6 +25,8 @@ pub fn routes() -> Router<AppState> {
             "/api/admin/oidc/providers/{id}",
             delete(delete_oidc_provider),
         )
+        // SAO admin entity overview (admin only)
+        .route("/api/admin/admin-entity", get(get_admin_entity_overview))
         // Audit log (admin only)
         .route("/api/admin/audit", get(query_audit_log))
 }
@@ -366,6 +368,23 @@ async fn query_audit_log(
 
     match crate::db::admin::query_audit_log(&state.inner.db, params.user_id, limit, offset).await {
         Ok(entries) => (StatusCode::OK, Json(json!({ "audit_log": entries }))),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        ),
+    }
+}
+
+async fn get_admin_entity_overview(
+    AdminUser(_admin): AdminUser,
+    State(state): State<AppState>,
+) -> (StatusCode, Json<Value>) {
+    match crate::db::admin_entity::get_admin_entity_overview(&state.inner.db).await {
+        Ok(Some(overview)) => (StatusCode::OK, Json(json!(overview))),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "SAO admin entity not configured" })),
+        ),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": e.to_string() })),

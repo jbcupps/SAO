@@ -3,8 +3,9 @@ import { useQuery } from '@tanstack/react-query';
 import { useVault } from '../hooks/useVault';
 import { listSecrets } from '../api/vault';
 import { listAgents } from '../api/agents';
-import { queryAuditLog } from '../api/admin';
+import { getAdminEntityOverview, queryAuditLog } from '../api/admin';
 import { listUsers } from '../api/admin';
+import { listSkills, adminListPendingSkills, adminListPendingBindings } from '../api/skills';
 import { useAuth } from '../hooks/useAuth';
 import type { AuditLogEntry } from '../types';
 
@@ -35,6 +36,29 @@ export default function Dashboard() {
   const { data: recentAudit } = useQuery({
     queryKey: ['audit-recent'],
     queryFn: () => queryAuditLog({ limit: 10 }),
+    enabled: isAdmin,
+  });
+
+  const { data: adminEntityOverview } = useQuery({
+    queryKey: ['admin-entity-overview'],
+    queryFn: getAdminEntityOverview,
+    enabled: isAdmin,
+  });
+
+  const { data: skills } = useQuery({
+    queryKey: ['skills'],
+    queryFn: () => listSkills(),
+  });
+
+  const { data: pendingSkills } = useQuery({
+    queryKey: ['pending-skills'],
+    queryFn: adminListPendingSkills,
+    enabled: isAdmin,
+  });
+
+  const { data: pendingBindings } = useQuery({
+    queryKey: ['pending-bindings'],
+    queryFn: adminListPendingBindings,
     enabled: isAdmin,
   });
 
@@ -136,6 +160,19 @@ export default function Dashboard() {
           </p>
         </div>
 
+        {/* Skills Count */}
+        <div className="bg-gray-800 rounded-xl border border-gray-700 p-6">
+          <h3 className="text-sm font-medium text-gray-400 mb-2">
+            Skills
+          </h3>
+          <p className="text-3xl font-bold text-white">
+            {skills?.length ?? '...'}
+          </p>
+          <p className="text-xs text-gray-500 mt-1">
+            Registered skills in catalog
+          </p>
+        </div>
+
         {/* Users Count (Admin Only) */}
         {isAdmin && (
           <div className="bg-gray-800 rounded-xl border border-gray-700 p-6">
@@ -150,7 +187,80 @@ export default function Dashboard() {
             </p>
           </div>
         )}
+
+        {/* Pending Reviews (Admin Only) */}
+        {isAdmin && (
+          <div className="bg-gray-800 rounded-xl border border-gray-700 p-6">
+            <h3 className="text-sm font-medium text-gray-400 mb-2">
+              Pending Reviews
+            </h3>
+            <p className="text-3xl font-bold text-white">
+              {(pendingSkills?.length ?? 0) + (pendingBindings?.length ?? 0)}
+            </p>
+            <p className="text-xs text-gray-500 mt-1">
+              Skills and bindings awaiting review
+            </p>
+          </div>
+        )}
       </div>
+
+      {isAdmin && adminEntityOverview && (
+        <div className="bg-gray-800 rounded-xl border border-gray-700 mb-8">
+          <div className="px-6 py-4 border-b border-gray-700">
+            <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-white">
+                  SAO Admin Entity
+                </h2>
+                <p className="text-sm text-gray-400 mt-1">
+                  {adminEntityOverview.admin_entity.name} tracks the bootstrap
+                  work required to get SAO operational beyond local Docker.
+                </p>
+              </div>
+              <div className="rounded-lg border border-gray-700 bg-gray-900/40 px-4 py-3">
+                <p className="text-xs uppercase tracking-wide text-gray-500">
+                  Deployment Target
+                </p>
+                <p className="text-sm font-medium text-white mt-1">
+                  {adminEntityOverview.admin_entity.deployment_target || 'azure_container_apps'}
+                </p>
+                <p className="text-xs text-gray-500 mt-1">
+                  {adminEntityOverview.admin_entity.provider} / {adminEntityOverview.admin_entity.model}
+                </p>
+              </div>
+            </div>
+          </div>
+          <div className="px-6 py-5">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {adminEntityOverview.work_items.map((item) => (
+                <div
+                  key={item.id}
+                  className="rounded-xl border border-gray-700 bg-gray-900/30 p-4"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-medium text-white">
+                        {item.title}
+                      </p>
+                      <p className="text-xs text-gray-500 mt-1 uppercase tracking-wide">
+                        {item.area.replace(/_/g, ' ')}
+                      </p>
+                    </div>
+                    <span className="inline-flex rounded-full border border-blue-500/30 bg-blue-500/10 px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-blue-300">
+                      {item.status.replace(/_/g, ' ')}
+                    </span>
+                  </div>
+                  {item.description && (
+                    <p className="text-sm text-gray-400 mt-3">
+                      {item.description}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Recent Audit Log */}
       {isAdmin && recentAudit && recentAudit.length > 0 && (

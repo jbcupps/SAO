@@ -1,6 +1,7 @@
 mod auth;
 mod db;
 mod routes;
+mod runtime;
 mod state;
 mod vault_state;
 mod ws;
@@ -37,6 +38,12 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize application state
     let app_state = state::init_app_state(pool, vault_state, webauthn, jwt_secret);
+
+    // Start background runtime scheduler
+    let runtime = app_state.inner.runtime.clone();
+    tokio::spawn(async move {
+        runtime.scheduler_loop().await;
+    });
 
     // Build CORS layer
     let cors = CorsLayer::new()

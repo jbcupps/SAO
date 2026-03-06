@@ -1,10 +1,12 @@
 pub mod admin;
+pub mod admin_entity;
 pub mod agents;
 pub mod audit;
 pub mod migrate;
 pub mod oidc;
 pub mod pool;
 pub mod sessions;
+pub mod skills;
 pub mod users;
 pub mod vault;
 pub mod vault_key;
