@@ -58,10 +58,7 @@ async fn handle_socket(socket: WebSocket, agent_id: String, state: AppState) {
                 Message::Text(text) => {
                     tracing::debug!("Agent {} sent: {}", agent_id_clone, text);
                     let msg_type = match serde_json::from_str::<serde_json::Value>(&text) {
-                        Ok(val) => val
-                            .get("type")
-                            .and_then(|v| v.as_str())
-                            .map(str::to_owned),
+                        Ok(val) => val.get("type").and_then(|v| v.as_str()).map(str::to_owned),
                         Err(_) => Some(text.to_string()),
                     };
 
@@ -72,17 +69,17 @@ async fn handle_socket(socket: WebSocket, agent_id: String, state: AppState) {
                         Some("heartbeat") => {
                             let last_heartbeat = chrono::Utc::now().to_rfc3339();
                             println!("Agent {} heartbeat received", agent_id_clone);
-                            let tweak = sao_core::ethical_bridge::propose_superego_tweak(
+                            let rollup = sao_core::ethical_bridge::propose_periodic_superego_rollup(
                                 &agent_id_clone,
-                                "ego summary placeholder",
                             );
-                            println!("Superego suggestion: {}", tweak);
+                            tracing::info!("Superego roll-up: {}", rollup);
                             let mut sender = recv_handle.lock().await;
                             if sender
                                 .send(Message::Text(
                                     serde_json::json!({
                                         "status": "ACTIVE",
                                         "last_heartbeat": last_heartbeat,
+                                        "tweak_proposal": rollup,
                                     })
                                     .to_string()
                                     .into(),
@@ -94,7 +91,11 @@ async fn handle_socket(socket: WebSocket, agent_id: String, state: AppState) {
                             }
                         }
                         Some(other) => {
-                            tracing::debug!("Agent {} unknown message type: {}", agent_id_clone, other);
+                            tracing::debug!(
+                                "Agent {} unknown message type: {}",
+                                agent_id_clone,
+                                other
+                            );
                         }
                         None => {}
                     }

@@ -11,6 +11,7 @@ pub struct EthicalEvaluationRequest {
     pub response: String,
     pub model: String,
 }
+
 /// 5-dimensional ethical scores returned from Ethical_AI_Reg.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct EthicalScores {
@@ -81,4 +82,12 @@ pub fn get_triangleethic_preview(agent_id: &str) -> serde_json::Value {
         "memetic_fitness": 0.94,
         "dual_welfare": "AI sentient = human (balanced)"
     })
+}
+
+pub fn propose_periodic_superego_rollup(agent_id: &str) -> String {
+    // Periodic roll-up placeholder - Superego only edits personality.md
+    format!(
+        "Periodic Superego roll-up for {}: personality tweak queued (soul.md untouched)",
+        agent_id
+    )
 }
