@@ -229,9 +229,8 @@ Agent ID: {agent_id}\n\
 Name: {name}\n\
 Created At: {created_at}\n\
 Purpose: foundational identity and continuity.\n",
-            signature = self.document_signature(format!(
-                "soul.md\n{agent_id}\n{name}\n{created_at}"
-            )),
+            signature =
+                self.document_signature(format!("soul.md\n{agent_id}\n{name}\n{created_at}")),
             agent_id = agent_id,
             name = name,
             created_at = created_at,
@@ -335,7 +334,9 @@ mutability: evolvable\n"
         file_name: &str,
         contents: &str,
     ) -> Result<(), String> {
-        if file_name.contains("soul.md") { return Err("soul.md is constitutionally immutable".into()); }
+        if file_name.contains("soul.md") {
+            return Err("soul.md is constitutionally immutable".into());
+        }
         let agent_dir = self.agent_dir(agent_id)?;
         self.write_birth_document(&agent_dir, file_name, contents, false)
     }

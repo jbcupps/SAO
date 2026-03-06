@@ -28,3 +28,4 @@ base64 = { workspace = true }
 url = { workspace = true }
 openidconnect = { workspace = true }
 reqwest = { workspace = true }
+rusqlite = { workspace = true }

@@ -2,19 +2,79 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { initializeVault } from '../api/auth';
+import { ApiError } from '../api/client';
+import type {
+  BootstrapModelConfig,
+  FrontierProvider,
+  SetupInitializationResult,
+} from '../types';
 
-type Step = 'welcome' | 'passphrase' | 'admin' | 'initializing' | 'complete';
+type Step =
+  | 'welcome'
+  | 'model'
+  | 'passphrase'
+  | 'admin'
+  | 'initializing'
+  | 'complete';
+
+const PROVIDERS: Array<{ value: FrontierProvider; label: string }> = [
+  { value: 'openai', label: 'OpenAI' },
+  { value: 'anthropic', label: 'Anthropic' },
+  { value: 'google', label: 'Google' },
+];
+
+const PROGRESS_INDEX: Record<Step, number> = {
+  welcome: 0,
+  model: 1,
+  passphrase: 2,
+  admin: 3,
+  initializing: 3,
+  complete: 4,
+};
+
+function formatSetupError(error: unknown): string {
+  if (error instanceof ApiError) {
+    try {
+      const parsed = JSON.parse(error.body) as { error?: string };
+      if (parsed.error) {
+        return parsed.error;
+      }
+    } catch {
+      return error.message;
+    }
+  }
+
+  return error instanceof Error ? error.message : 'Initialization failed';
+}
 
 export default function SetupWizard() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
   const [step, setStep] = useState<Step>('welcome');
+  const [provider, setProvider] = useState<FrontierProvider>('openai');
+  const [model, setModel] = useState('');
+  const [apiKey, setApiKey] = useState('');
+  const [entityName, setEntityName] = useState('sao-admin-entity');
   const [passphrase, setPassphrase] = useState('');
   const [passphraseConfirm, setPassphraseConfirm] = useState('');
   const [adminUsername, setAdminUsername] = useState('');
   const [adminDisplayName, setAdminDisplayName] = useState('');
+  const [result, setResult] = useState<SetupInitializationResult | null>(null);
   const [error, setError] = useState('');
+
+  const handleModelNext = () => {
+    setError('');
+    if (!model.trim()) {
+      setError('Model identifier is required');
+      return;
+    }
+    if (!apiKey.trim()) {
+      setError('API key is required');
+      return;
+    }
+    setStep('passphrase');
+  };
 
   const handlePassphraseNext = () => {
     setError('');
@@ -36,21 +96,28 @@ export default function SetupWizard() {
       return;
     }
 
+    const bootstrapModel: BootstrapModelConfig = {
+      provider,
+      model: model.trim(),
+      api_key: apiKey.trim(),
+      entity_name: entityName.trim() || 'sao-admin-entity',
+    };
+
     setStep('initializing');
 
     try {
-      await initializeVault(
+      const response = await initializeVault(
         passphrase,
         adminUsername.trim(),
+        bootstrapModel,
         adminDisplayName.trim() || undefined,
       );
+      setResult(response);
       await queryClient.invalidateQueries({ queryKey: ['setup-status'] });
       setStep('complete');
     } catch (err) {
       setStep('admin');
-      setError(
-        err instanceof Error ? err.message : 'Initialization failed',
-      );
+      setError(formatSetupError(err));
     }
   };
 
@@ -60,10 +127,8 @@ export default function SetupWizard() {
 
   return (
     <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4">
-      <div className="w-full max-w-lg">
-        {/* Card */}
+      <div className="w-full max-w-xl">
         <div className="bg-gray-800 rounded-xl shadow-2xl border border-gray-700 overflow-hidden">
-          {/* Header */}
           <div className="px-8 py-6 border-b border-gray-700 bg-gray-800">
             <h1 className="text-2xl font-bold text-white">SAO Setup</h1>
             <p className="text-sm text-gray-400 mt-1">
@@ -71,9 +136,7 @@ export default function SetupWizard() {
             </p>
           </div>
 
-          {/* Content */}
           <div className="px-8 py-6">
-            {/* Step: Welcome */}
             {step === 'welcome' && (
               <div className="space-y-4">
                 <p className="text-gray-300">
@@ -81,16 +144,18 @@ export default function SetupWizard() {
                   guide you through the initial setup:
                 </p>
                 <ul className="text-gray-400 text-sm space-y-2 list-disc list-inside">
+                  <li>Provision the SAO admin entity and connect its frontier model</li>
                   <li>Set a vault passphrase for encrypting all secrets</li>
                   <li>Create the initial administrator account</li>
-                  <li>Initialize the master signing key</li>
+                  <li>Seed tracked bootstrap work items for Azure delivery</li>
                 </ul>
                 <p className="text-yellow-400 text-sm">
-                  Keep the vault passphrase safe. It is required to unseal the
-                  vault after restarts.
+                  The model credential is validated during setup, encrypted in
+                  the vault, and bound to the SAO admin entity that owns the
+                  initial work queue.
                 </p>
                 <button
-                  onClick={() => setStep('passphrase')}
+                  onClick={() => setStep('model')}
                   className="w-full mt-4 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors"
                 >
                   Begin Setup
@@ -98,7 +163,87 @@ export default function SetupWizard() {
               </div>
             )}
 
-            {/* Step: Passphrase */}
+            {step === 'model' && (
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-1">
+                    Frontier Provider
+                  </label>
+                  <select
+                    value={provider}
+                    onChange={(e) =>
+                      setProvider(e.target.value as FrontierProvider)
+                    }
+                    className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                  >
+                    {PROVIDERS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-1">
+                    Model Identifier
+                  </label>
+                  <input
+                    type="text"
+                    value={model}
+                    onChange={(e) => setModel(e.target.value)}
+                    placeholder="Provider model ID"
+                    className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-1">
+                    API Key
+                  </label>
+                  <input
+                    type="password"
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                    placeholder="Credential used to validate and seed the SAO admin entity"
+                    className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-1">
+                    SAO Admin Entity Name
+                  </label>
+                  <input
+                    type="text"
+                    value={entityName}
+                    onChange={(e) => setEntityName(e.target.value)}
+                    placeholder="sao-admin-entity"
+                    className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    This entity is created during first-run bootstrap and keeps
+                    track of the initial work required to get SAO operational.
+                  </p>
+                </div>
+                {error && <p className="text-red-400 text-sm">{error}</p>}
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => {
+                      setError('');
+                      setStep('welcome');
+                    }}
+                    className="px-4 py-2.5 bg-gray-700 hover:bg-gray-600 text-gray-300 font-medium rounded-lg transition-colors"
+                  >
+                    Back
+                  </button>
+                  <button
+                    onClick={handleModelNext}
+                    className="flex-1 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            )}
+
             {step === 'passphrase' && (
               <div className="space-y-4">
                 <div>
@@ -125,14 +270,12 @@ export default function SetupWizard() {
                     className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
                   />
                 </div>
-                {error && (
-                  <p className="text-red-400 text-sm">{error}</p>
-                )}
+                {error && <p className="text-red-400 text-sm">{error}</p>}
                 <div className="flex gap-3">
                   <button
                     onClick={() => {
                       setError('');
-                      setStep('welcome');
+                      setStep('model');
                     }}
                     className="px-4 py-2.5 bg-gray-700 hover:bg-gray-600 text-gray-300 font-medium rounded-lg transition-colors"
                   >
@@ -148,7 +291,6 @@ export default function SetupWizard() {
               </div>
             )}
 
-            {/* Step: Admin Account */}
             {step === 'admin' && (
               <div className="space-y-4">
                 <div>
@@ -175,9 +317,15 @@ export default function SetupWizard() {
                     className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
                   />
                 </div>
-                {error && (
-                  <p className="text-red-400 text-sm">{error}</p>
-                )}
+                <div className="rounded-lg border border-gray-700 bg-gray-800/70 p-4">
+                  <p className="text-sm text-gray-300">
+                    SAO admin entity: <span className="text-white">{entityName.trim() || 'sao-admin-entity'}</span>
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    {provider} / {model.trim() || 'model required'}
+                  </p>
+                </div>
+                {error && <p className="text-red-400 text-sm">{error}</p>}
                 <div className="flex gap-3">
                   <button
                     onClick={() => {
@@ -198,18 +346,17 @@ export default function SetupWizard() {
               </div>
             )}
 
-            {/* Step: Initializing */}
             {step === 'initializing' && (
               <div className="text-center py-8">
                 <div className="inline-block w-10 h-10 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mb-4"></div>
-                <p className="text-gray-300">Initializing vault...</p>
+                <p className="text-gray-300">Initializing SAO...</p>
                 <p className="text-gray-500 text-sm mt-1">
-                  Generating master key and encrypting vault
+                  Validating the frontier model, encrypting the credential, and
+                  provisioning the SAO admin entity and its initial work queue
                 </p>
               </div>
             )}
 
-            {/* Step: Complete */}
             {step === 'complete' && (
               <div className="space-y-4 text-center py-4">
                 <div className="text-green-400 text-4xl mb-2">[OK]</div>
@@ -217,9 +364,38 @@ export default function SetupWizard() {
                   Setup Complete
                 </h2>
                 <p className="text-gray-400">
-                  SAO has been initialized. You can now log in with your
-                  admin account.
+                  SAO has been initialized. The SAO admin entity is provisioned,
+                  its credential is sealed in the vault, and the first tracked
+                  work items are ready.
                 </p>
+                {result && (
+                  <div className="rounded-lg border border-gray-700 bg-gray-800/70 p-4 text-left space-y-3">
+                    <p className="text-sm text-gray-300">
+                      Entity: <span className="text-white">{result.admin_entity.name}</span>
+                    </p>
+                    <p className="text-xs text-gray-500 mt-1">
+                      {result.admin_entity.provider} / {result.admin_entity.model}
+                    </p>
+                    <div className="border-t border-gray-700 pt-3">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">
+                        Initial Work Queue
+                      </p>
+                      <div className="mt-2 space-y-2">
+                        {result.work_items.slice(0, 4).map((item) => (
+                          <div
+                            key={item.id}
+                            className="rounded-lg border border-gray-700 bg-gray-900/40 px-3 py-2"
+                          >
+                            <p className="text-sm text-white">{item.title}</p>
+                            <p className="text-xs text-gray-500 mt-1">
+                              {item.description}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
                 <button
                   onClick={handleGoToLogin}
                   className="w-full mt-4 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors"
@@ -230,15 +406,14 @@ export default function SetupWizard() {
             )}
           </div>
 
-          {/* Progress indicator */}
           <div className="px-8 py-4 border-t border-gray-700 bg-gray-800/50">
             <div className="flex gap-2">
-              {['welcome', 'passphrase', 'admin', 'complete'].map(
-                (s, i) => (
+              {['welcome', 'model', 'passphrase', 'admin', 'complete'].map(
+                (progressStep, index) => (
                   <div
-                    key={s}
+                    key={progressStep}
                     className={`h-1.5 flex-1 rounded-full ${
-                      ['welcome', 'passphrase', 'admin', 'initializing', 'complete'].indexOf(step) >= i
+                      PROGRESS_INDEX[step] >= index
                         ? 'bg-blue-600'
                         : 'bg-gray-700'
                     }`}

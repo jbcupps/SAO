@@ -3,6 +3,7 @@ pub mod ethical_bridge;
 pub mod global_config;
 pub mod identity_manager;
 pub mod master_key;
+pub mod skills;
 pub mod vault;
 pub use global_config::*;
 pub use identity_manager::*;

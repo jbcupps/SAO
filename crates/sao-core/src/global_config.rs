@@ -12,6 +12,36 @@ pub struct AgentEntry {
     pub directory: PathBuf,
 }
 
+/// Canonical workspace and memory paths for local runtime operations.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceConfig {
+    pub workspace_root: PathBuf,
+    pub docs_inbox: PathBuf,
+    pub memory_store_path: PathBuf,
+    pub backup_path: PathBuf,
+    pub archive_path: PathBuf,
+    pub temp_path: PathBuf,
+    #[serde(default)]
+    pub allowed_read_roots: Vec<PathBuf>,
+    #[serde(default)]
+    pub allowed_write_roots: Vec<PathBuf>,
+}
+
+impl Default for WorkspaceConfig {
+    fn default() -> Self {
+        Self {
+            workspace_root: PathBuf::from("workspace"),
+            docs_inbox: PathBuf::from("workspace/docs_inbox"),
+            memory_store_path: PathBuf::from("workspace/memory/heph_memory.sqlite3"),
+            backup_path: PathBuf::from("workspace/backups"),
+            archive_path: PathBuf::from("workspace/archive"),
+            temp_path: PathBuf::from("workspace/tmp"),
+            allowed_read_roots: vec![PathBuf::from("workspace"), PathBuf::from("identities")],
+            allowed_write_roots: vec![PathBuf::from("workspace")],
+        }
+    }
+}
+
 /// Global settings for the Hive (multi-agent host).
 /// Stored at `{data_root}/global_settings.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -21,6 +51,8 @@ pub struct GlobalConfig {
     /// List of registered agents.
     #[serde(default)]
     pub agents: Vec<AgentEntry>,
+    #[serde(default)]
+    pub workspace: WorkspaceConfig,
 }
 
 impl GlobalConfig {
@@ -29,6 +61,7 @@ impl GlobalConfig {
         Self {
             master_key_path: data_root.join("master.key"),
             agents: Vec::new(),
+            workspace: WorkspaceConfig::default(),
         }
     }
 

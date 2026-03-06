@@ -1,5 +1,6 @@
 //! Application state for sao-server.
 
+use crate::runtime::RuntimeManager;
 use sao_core::IdentityManager;
 use sqlx::PgPool;
 use std::path::PathBuf;
@@ -18,6 +19,7 @@ pub struct AppState {
 #[allow(dead_code)]
 pub struct AppStateInner {
     pub identity_manager: Arc<IdentityManager>,
+    pub runtime: Arc<RuntimeManager>,
     pub active_agent_id: std::sync::RwLock<Option<String>>,
     /// WebSocket broadcast channel for streaming events to connected agents
     pub ws_tx: tokio::sync::broadcast::Sender<WsEvent>,
@@ -51,12 +53,17 @@ pub fn init_app_state(
         tracing::error!("Failed to initialize IdentityManager: {}", e);
         panic!("IdentityManager initialization failed: {}", e);
     }));
+    let runtime = Arc::new(RuntimeManager::new(data_root.clone()).unwrap_or_else(|e| {
+        tracing::error!("Failed to initialize RuntimeManager: {}", e.to_value());
+        panic!("RuntimeManager initialization failed");
+    }));
 
     let (ws_tx, _) = tokio::sync::broadcast::channel::<WsEvent>(256);
 
     AppState {
         inner: Arc::new(AppStateInner {
             identity_manager,
+            runtime,
             active_agent_id: std::sync::RwLock::new(None),
             ws_tx,
             db,

@@ -1,5 +1,6 @@
 import { apiRequest } from './client';
 import type {
+  AdminEntityOverview,
   User,
   OidcProvider,
   AuditLogEntry,
@@ -71,4 +72,8 @@ export async function queryAuditLog(
   return apiRequest<AuditLogEntry[]>(
     `/api/admin/audit${qs ? `?${qs}` : ''}`,
   );
+}
+
+export async function getAdminEntityOverview(): Promise<AdminEntityOverview> {
+  return apiRequest<AdminEntityOverview>('/api/admin/admin-entity');
 }

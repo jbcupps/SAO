@@ -1,5 +1,11 @@
 import { apiRequest } from './client';
-import type { AuthTokens, SetupStatus, User } from '../types';
+import type {
+  AuthTokens,
+  BootstrapModelConfig,
+  SetupInitializationResult,
+  SetupStatus,
+  User,
+} from '../types';
 
 export async function setupStatus(): Promise<SetupStatus> {
   return apiRequest<SetupStatus>('/api/setup/status');
@@ -8,14 +14,16 @@ export async function setupStatus(): Promise<SetupStatus> {
 export async function initializeVault(
   passphrase: string,
   admin_username: string,
+  bootstrap_model: BootstrapModelConfig,
   admin_display_name?: string,
-): Promise<AuthTokens> {
-  return apiRequest<AuthTokens>('/api/setup/initialize', {
+): Promise<SetupInitializationResult> {
+  return apiRequest<SetupInitializationResult>('/api/setup/initialize', {
     method: 'POST',
     body: JSON.stringify({
       passphrase,
       admin_username,
       admin_display_name: admin_display_name || admin_username,
+      bootstrap_model,
     }),
   });
 }

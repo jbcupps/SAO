@@ -65,6 +65,54 @@ export interface SetupStatus {
   needs_setup: boolean;
 }
 
+export type FrontierProvider = 'openai' | 'anthropic' | 'google';
+
+export interface BootstrapModelConfig {
+  provider: FrontierProvider;
+  model: string;
+  api_key: string;
+  entity_name?: string;
+}
+
+export interface AdminEntitySummary {
+  id: string;
+  identity_agent_id: string;
+  name: string;
+  provider: FrontierProvider;
+  model: string;
+  secret_id: string;
+  role?: string;
+  deployment_target?: string;
+  iac_strategy?: string;
+  capabilities?: string[];
+}
+
+export interface AdminWorkItem {
+  id: string;
+  admin_agent_id: string;
+  sequence_no: number;
+  slug: string;
+  title: string;
+  description: string | null;
+  area: string;
+  status: 'pending' | 'in_progress' | 'blocked' | 'done';
+  priority: number;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdminEntityOverview {
+  admin_entity: AdminEntitySummary;
+  work_items: AdminWorkItem[];
+}
+
+export interface SetupInitializationResult extends AdminEntityOverview {
+  status: 'initialized';
+  user_id: string;
+  vault_status: 'unsealed';
+}
+
 export interface VaultStatus {
   status: 'uninitialized' | 'sealed' | 'unsealed';
 }
@@ -106,3 +154,102 @@ export interface AuditLogParams {
   offset?: number;
   limit?: number;
 }
+
+// --- Skills & Tools Registry ---
+
+export interface SkillCatalogEntry {
+  id: string;
+  name: string;
+  version: string;
+  description: string | null;
+  author: string | null;
+  category: string | null;
+  tags: string[];
+  permissions: string[];
+  api_endpoints: string[];
+  input_schema: Record<string, unknown> | null;
+  output_schema: Record<string, unknown> | null;
+  risk_level: 'low' | 'medium' | 'high' | 'critical' | 'unknown';
+  status: 'pending_review' | 'approved' | 'rejected' | 'deprecated';
+  policy_score: number | null;
+  policy_details: PolicyCheck[] | null;
+  created_by_user_id: string | null;
+  created_by_agent_id: string | null;
+  reviewed_by_user_id: string | null;
+  review_notes: string | null;
+  reviewed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgentSkillBinding {
+  id: string;
+  agent_id: string;
+  skill_id: string;
+  status: 'pending_review' | 'approved' | 'rejected' | 'revoked';
+  config: Record<string, unknown> | null;
+  declared_at: string;
+  reviewed_by_user_id: string | null;
+  review_notes: string | null;
+  reviewed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SkillReview {
+  id: string;
+  target_type: 'catalog' | 'binding';
+  target_id: string;
+  action: string;
+  reviewer_user_id: string | null;
+  policy_score: number | null;
+  policy_details: PolicyCheck[] | null;
+  notes: string | null;
+  created_at: string;
+}
+
+export interface PolicyCheck {
+  name: string;
+  passed: boolean;
+  weight: number;
+  message: string;
+}
+
+export interface CreateSkillData {
+  name: string;
+  version?: string;
+  description?: string;
+  author?: string;
+  category?: string;
+  tags?: string[];
+  permissions?: string[];
+  api_endpoints?: string[];
+  input_schema?: Record<string, unknown>;
+  output_schema?: Record<string, unknown>;
+}
+
+export interface SkillCheckinEntry {
+  name: string;
+  version: string;
+  description?: string;
+  author?: string;
+  category?: string;
+  tags?: string[];
+  permissions?: string[];
+  api_endpoints?: string[];
+  input_schema?: Record<string, unknown>;
+  output_schema?: Record<string, unknown>;
+}
+
+export interface SkillCheckinResult {
+  name: string;
+  version: string;
+  skill_id: string;
+  binding_id: string;
+  skill_status: string;
+  binding_status: string;
+  policy_score: number | null;
+  auto_approved: boolean;
+}
+
+export type ReviewAction = 'approve' | 'reject' | 'request_changes' | 'deprecate' | 'revoke';

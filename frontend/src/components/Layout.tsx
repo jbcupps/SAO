@@ -55,6 +55,7 @@ export default function Layout() {
           <SidebarLink to="/" label="Dashboard" icon="[D]" />
           <SidebarLink to="/vault" label="Key Vault" icon="[K]" />
           <SidebarLink to="/agents" label="Agents" icon="[A]" />
+          <SidebarLink to="/skills" label="Skills" icon="[T]" />
           <SidebarLink to="/audit" label="Audit Log" icon="[L]" />
 
           {isAdmin && (
@@ -66,6 +67,7 @@ export default function Layout() {
               </div>
               <SidebarLink to="/admin/users" label="Users" icon="[U]" />
               <SidebarLink to="/admin/sso" label="SSO" icon="[S]" />
+              <SidebarLink to="/admin/skills/review" label="Skill Reviews" icon="[R]" />
             </>
           )}
         </nav>

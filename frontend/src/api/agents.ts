@@ -2,7 +2,8 @@ import { apiRequest } from './client';
 import type { Agent } from '../types';
 
 export async function listAgents(): Promise<Agent[]> {
-  return apiRequest<Agent[]>('/api/agents');
+  const response = await apiRequest<{ agents: Agent[] }>('/api/agents');
+  return response.agents;
 }
 
 export async function createAgent(name: string): Promise<Agent> {
