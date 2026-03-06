@@ -13,11 +13,12 @@ use axum::{
     Router,
 };
 use futures_util::{SinkExt, StreamExt};
+use tokio::sync::Mutex;
 
 use crate::state::AppState;
 
 pub fn ws_routes() -> Router<AppState> {
-    Router::new().route("/ws/agent/{agent_id}", get(ws_handler))
+    Router::new().route("/ws/agent/:agent_id", get(ws_handler))
 }
 
 async fn ws_handler(
@@ -30,16 +31,19 @@ async fn ws_handler(
 }
 
 async fn handle_socket(socket: WebSocket, agent_id: String, state: AppState) {
-    let (mut sender, mut receiver) = socket.split();
+    let (sender, mut receiver) = socket.split();
+    let sender = std::sync::Arc::new(Mutex::new(sender));
 
     // Subscribe to broadcast channel
     let mut rx = state.inner.ws_tx.subscribe();
 
     // Spawn task to forward broadcast events to this WebSocket
+    let send_handle = sender.clone();
     let send_task = tokio::spawn(async move {
         while let Ok(event) = rx.recv().await {
             let msg = serde_json::to_string(&event).unwrap_or_default();
-            if sender.send(Message::Text(msg)).await.is_err() {
+            let mut sender = send_handle.lock().await;
+            if sender.send(Message::Text(msg.into())).await.is_err() {
                 break;
             }
         }
@@ -47,34 +51,52 @@ async fn handle_socket(socket: WebSocket, agent_id: String, state: AppState) {
 
     // Receive messages from the agent
     let agent_id_clone = agent_id.clone();
+    let recv_handle = sender.clone();
     let recv_task = tokio::spawn(async move {
         while let Some(Ok(msg)) = receiver.next().await {
             match msg {
                 Message::Text(text) => {
                     tracing::debug!("Agent {} sent: {}", agent_id_clone, text);
-                    // Handle agent messages (status updates, etc.)
-                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) {
-                        if let Some(msg_type) = val.get("type").and_then(|v| v.as_str()) {
-                            match msg_type {
-                                "status" => {
-                                    tracing::info!(
-                                        "Agent {} status update: {}",
-                                        agent_id_clone,
-                                        text
-                                    );
-                                }
-                                "heartbeat" => {
-                                    // Agent is alive
-                                }
-                                _ => {
-                                    tracing::debug!(
-                                        "Agent {} unknown message type: {}",
-                                        agent_id_clone,
-                                        msg_type
-                                    );
-                                }
+                    let msg_type = match serde_json::from_str::<serde_json::Value>(&text) {
+                        Ok(val) => val
+                            .get("type")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_owned),
+                        Err(_) => Some(text.to_string()),
+                    };
+
+                    match msg_type.as_deref() {
+                        Some("status") => {
+                            tracing::info!("Agent {} status update: {}", agent_id_clone, text);
+                        }
+                        Some("heartbeat") => {
+                            let last_heartbeat = chrono::Utc::now().to_rfc3339();
+                            println!("Agent {} heartbeat received", agent_id_clone);
+                            let tweak = sao_core::ethical_bridge::propose_superego_tweak(
+                                &agent_id_clone,
+                                "ego summary placeholder",
+                            );
+                            println!("Superego suggestion: {}", tweak);
+                            let mut sender = recv_handle.lock().await;
+                            if sender
+                                .send(Message::Text(
+                                    serde_json::json!({
+                                        "status": "ACTIVE",
+                                        "last_heartbeat": last_heartbeat,
+                                    })
+                                    .to_string()
+                                    .into(),
+                                ))
+                                .await
+                                .is_err()
+                            {
+                                break;
                             }
                         }
+                        Some(other) => {
+                            tracing::debug!("Agent {} unknown message type: {}", agent_id_clone, other);
+                        }
+                        None => {}
                     }
                 }
                 Message::Close(_) => break,

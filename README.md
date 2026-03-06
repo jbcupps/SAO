@@ -1,98 +1,171 @@
 # SAO - Secure Agent Orchestrator
 
-Multi-agent orchestration server for managing AI agent identities, coordination, and ethical evaluation bridging.
+Local-first control plane for agent identity, birth documents, vault bootstrap, and real-time agent status.
 
-## Architecture
+## Current Direction
 
-SAO is the management layer in the AI Ethical Stack:
+SAO is currently being built as the Phase 1 foundation for the broader SAO + Orion vision.
 
-- **abigail** - The agent (what the AI *is*)
-- **SAO** - The orchestrator (how agents are *managed*) <- you are here
-- **Ethical_AI_Reg** - The ethical framework (how alignment is *measured*)
-- **Phoenix** - The coordination point (how the effort is *tracked*)
+The focus in this repo right now is:
 
-## Ecosystem Role & Alignment
+- local Docker bootstrap with PostgreSQL
+- agent birth flow that creates four signed documents: `soul.md`, `ethics.md`, `org-map.md`, and `personality.md`
+- a hard guard that prevents `soul.md` from being modified after birth
+- a basic agent WebSocket channel for heartbeat/status traffic
+- a minimal Superego proposal stub that can suggest changes to ego-level behavior without touching `soul.md`
 
-This repository is one piece of a deliberate three-part identity ecosystem (see [sao-ecosystem-article.md](https://github.com/jbcupps/SAO/blob/main/sao-ecosystem-article.md) and diagrams below).
+Target-state architecture notes in `documents/` and older ecosystem writeups describe later phases. This README describes the current implementation and immediate direction, not the full future platform.
 
-- **Abigail** – personal local agent with full free will (owner-controlled keys).
-- **Orion Dock** – enterprise container agents (same soul + skills model, SAO-provisioned).
-- **SAO** – central management, cryptographic vault, agent registry, enterprise IDP bridge.
+## What Works Today
 
-**Agent Soul Contract**
-Every running agent instance carries the same archetype:
-- `soul.md` + `ethics.md` + `org-map.md` + **`personality.md`**
-- `personality.md` is the only evolvable ego document; all other files are immutable after birth.
-- Merged at birth into the runtime system prompt.
-- Skills always split: **tool** (code/env) + **how-to-use.md** (ego guidance).
+- Docker compose stack at `docker/docker-compose.yml`
+- Axum server on `http://localhost:3100`
+- PostgreSQL-backed control-plane state
+- `POST /api/agents` birth flow returning a `READY` summary
+- local identity directories under `SAO_DATA_DIR/identities/<agent_id>/`
+- agent WebSocket endpoint at `ws://localhost:3100/ws/agent/<agent_id>`
+- health, setup, auth, OIDC, admin, and vault server surfaces that support the control plane
 
-**Visual References** (embed these in the repo or link):
-- Modular Crate Architecture (Orion)
-- Birth Lifecycle
-- Bicameral Mind / IdEgo Router
-- Zero Trust Security Model
-- Autonomous Execution Loop
-- SAO Trust Chain & Ecosystem Overview
+## Birth Flow
 
-## Provisioning Flow
+Current birth flow behavior:
 
-SAO acts as the badge-issuer for the entire agent ecosystem. See the [SAO Trust Chain & Ecosystem Overview](https://github.com/jbcupps/SAO/blob/main/sao-ecosystem-article.md) for the full diagram.
+1. `POST /api/agents` creates a local identity entry.
+2. SAO creates four birth documents in the agent directory.
+3. Each document is stamped with a signature generated from the SAO master key.
+4. `soul.md` is treated as the constitutional root and cannot be modified through the identity manager.
+5. The API returns a minimal readiness response.
 
-1. **Agent Registration** – A new agent (Abigail local or Orion container) calls `POST /api/agents` with its public key.
-2. **Master Key Signing** – SAO signs the agent's public key with the master Ed25519 key, producing a verifiable trust chain.
-3. **Soul Injection** – SAO provisions the agent with its `soul.md`, `ethics.md`, `org-map.md`, and `personality.md` templates (see [Agent Archetype](docs/agent_archetype.md)). `personality.md` is the only evolvable ego document; all other files are immutable after birth.
-4. **Key Provisioning** – The agent receives its assigned API keys and secrets from the vault, encrypted in transit.
-5. **Hive Assignment** – Enterprise agents (Orion) are assigned to a hive, inheriting shared permissions and key sets.
-6. **Birth Confirmation** – SAO records the birth event in the audit log and broadcasts it over WebSocket to connected agents.
+Current response shape:
 
-For details on how the vault and registry handle identity signing and org-map injection, see [docs/VAULT_AND_REGISTRY.md](docs/VAULT_AND_REGISTRY.md).
-
-## Crates
-
-| Crate | Purpose |
-|-------|---------|
-| `sao-core` | Core orchestration types: identity management, master key operations, agent/ethical bridges |
-| `sao-server` | Headless Axum server with REST API + WebSocket for agent communication |
-
-## Features
-
-- **Identity Management**: Create, verify, and manage multiple agent identities using Ed25519 cryptographic signatures
-- **Master Key Signing**: Agents are signed by a master key to form a cryptographic trust chain
-- **Agent Bridge**: REST/WebSocket interface for agents to register and communicate
-- **Ethical Bridge**: Forward ethical evaluation requests to Ethical_AI_Reg and return 5D scores
-- **PostgreSQL** (optional): Persistent storage for cross-agent data
-
-## Quick Start
-
-```bash
-# Build
-cargo build
-
-# Run the server (default port 3100)
-cargo run --bin sao-server
-
-# With custom settings
-SAO_BIND_ADDR=0.0.0.0:3200 SAO_DATA_DIR=/path/to/data cargo run --bin sao-server
+```json
+{
+  "status": "READY",
+  "documents": ["soul.md", "ethics.md", "org-map.md", "personality.md"],
+  "soul_immutable": true
+}
 ```
 
-## API Endpoints
+Document roles:
 
-| Method | Path | Description |
-|--------|------|-------------|
+- `soul.md`: immutable constitutional root
+- `ethics.md`: ethical baseline document
+- `org-map.md`: initial registry and placement metadata
+- `personality.md`: evolvable ego/personality surface
+
+## WebSocket Heartbeat
+
+Agents connect on:
+
+```text
+ws://localhost:3100/ws/agent/<agent_id>
+```
+
+Current heartbeat behavior:
+
+- agent sends raw text `heartbeat`
+- SAO logs heartbeat receipt to the server console
+- SAO replies with JSON status
+- SAO calls a Superego stub that prints a personality tweak proposal
+
+Current response shape:
+
+```json
+{
+  "status": "ACTIVE",
+  "last_heartbeat": "2026-03-05T20:00:00Z"
+}
+```
+
+The Superego path is intentionally minimal at this stage. It does not patch files, does not touch `soul.md`, and does not yet persist lifecycle state.
+
+## Local Development
+
+Preferred development path: run everything locally in Docker.
+
+```bash
+docker-compose -f docker/docker-compose.yml up -d --build
+curl http://localhost:3100/api/health
+```
+
+Expected health response:
+
+```json
+{
+  "status": "ok",
+  "service": "sao",
+  "version": "0.0.1",
+  "database": {
+    "connected": true,
+    "healthy": true
+  }
+}
+```
+
+Native `cargo run` is possible, but on Windows it currently depends on a working OpenSSL toolchain. Docker is the safer default dev path for this repo.
+
+## Quick Verification
+
+Create an agent:
+
+```bash
+curl -X POST http://localhost:3100/api/agents \
+  -H "Content-Type: application/json" \
+  -d '{"name":"TestAgent","type":"personal","pubkey":"dummy-ed25519-key"}'
+```
+
+Test heartbeat with `wscat`:
+
+```bash
+wscat -c ws://localhost:3100/ws/agent/test123
+```
+
+Then send:
+
+```text
+heartbeat
+```
+
+Expected server log lines:
+
+```text
+Agent test123 heartbeat received
+Superego suggestion: Personality tweak proposal for test123: increase caution by 5% (based on roll-up)
+```
+
+## API Surface
+
+Core endpoints for the current foundation:
+
+| Method | Path | Purpose |
+|--------|------|---------|
 | `GET` | `/api/health` | Health check |
-| `GET` | `/api/agents` | List registered agents |
-| `POST` | `/api/agents` | Create new agent entry |
-| `POST` | `/api/ethical/evaluate` | Forward ethical evaluation |
-| `WS` | `/ws/agent/{id}` | Agent WebSocket connection |
+| `POST` | `/api/agents` | Create an agent and birth documents |
+| `GET` | `/api/agents` | List agents |
+| `GET` | `/api/agents/{id}` | Fetch one agent |
+| `DELETE` | `/api/agents/{id}` | Delete one agent |
+| `WS` | `/ws/agent/<agent_id>` | Agent real-time channel |
 
-## Environment Variables
+Additional control-plane routes already exist for setup, auth, OIDC, admin, vault, and ethical evaluation.
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `SAO_BIND_ADDR` | `0.0.0.0:3100` | Server bind address |
-| `SAO_DATA_DIR` | OS data dir + `/sao` | Data storage directory |
-| `DATABASE_URL` | - | PostgreSQL connection string (optional) |
-| `AO_DB_SSL` | `false` | Enable SSL for PostgreSQL |
+## Repository Layout
+
+| Path | Purpose |
+|------|---------|
+| `crates/sao-core` | identity manager, master key handling, vault primitives, ethical bridge stubs |
+| `crates/sao-server` | Axum API server, DB access, auth, WebSocket handling |
+| `docker/` | local Docker build and compose stack |
+| `docs/` | implementation notes and supporting repo docs |
+| `documents/` | target-state architecture analysis and longer-form planning docs |
+
+## Near-Term Direction
+
+The next slices are expected to stay small, local, and testable:
+
+- persist agent heartbeat and lifecycle state instead of logging only
+- keep Superego proposals constrained to ego-level surfaces such as `personality.md`
+- tighten the birth artifact and registry flow beyond the current minimal stub
+- continue verifying every slice in local Docker before expanding scope
 
 ## License
 
