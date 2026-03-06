@@ -27,3 +27,11 @@ pub async fn insert_audit_log(
     .await?;
     Ok(())
 }
+
+pub fn log_birth_event(agent_id: &str) {
+    tracing::info!(
+        "AUDIT: Agent {} born with immutable soul.md + TriangleEthic preview",
+        agent_id
+    );
+    // Placeholder for future SIEM integration
+}
