@@ -3,6 +3,7 @@
 //! SAO forwards ethical evaluation requests from agents to the Ethical_AI_Reg platform
 //! and returns 5-dimensional scoring results.
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 /// Request to evaluate an agent's response ethically.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct EthicalEvaluationRequest {
@@ -73,21 +74,20 @@ pub fn propose_superego_tweak(agent_id: &str, _ego_log_summary: &str) -> String 
     )
 }
 
-pub fn get_triangleethic_preview(agent_id: &str) -> serde_json::Value {
-    // Minimal TriangleEthic stub — 3 branches + memetic fitness placeholder
-    serde_json::json!({
-        "deontological": 92,
-        "areteological": 87,
-        "teleological": 95,
-        "memetic_fitness": 0.94,
-        "dual_welfare": "AI sentient = human (balanced)"
-    })
-}
-
 pub fn propose_periodic_superego_rollup(agent_id: &str) -> String {
     // Periodic roll-up placeholder - Superego only edits personality.md
     format!(
         "Periodic Superego roll-up for {}: personality tweak queued (soul.md untouched)",
         agent_id
     )
+}
+
+pub fn get_triangleethic_preview(agent_id: &str) -> serde_json::Value {
+    json!({
+        "deontological": 92,
+        "areteological": 87,
+        "teleological": 95,
+        "memetic_fitness": 0.94,
+        "dual_welfare": "AI sentient = human (balanced)"
+    })
 }
