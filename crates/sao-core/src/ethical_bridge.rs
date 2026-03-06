@@ -71,3 +71,14 @@ pub fn propose_superego_tweak(agent_id: &str, _ego_log_summary: &str) -> String 
         agent_id
     )
 }
+
+pub fn get_triangleethic_preview(agent_id: &str) -> serde_json::Value {
+    // Minimal TriangleEthic stub — 3 branches + memetic fitness placeholder
+    serde_json::json!({
+        "deontological": 92,
+        "areteological": 87,
+        "teleological": 95,
+        "memetic_fitness": 0.94,
+        "dual_welfare": "AI sentient = human (balanced)"
+    })
+}
