@@ -63,3 +63,11 @@ impl EthicalBridgeClient {
         Ok(resp)
     }
 }
+
+pub fn propose_superego_tweak(agent_id: &str, _ego_log_summary: &str) -> String {
+    // Superego stub - never touches soul.md
+    format!(
+        "Personality tweak proposal for {}: increase caution by 5% (based on roll-up)",
+        agent_id
+    )
+}
