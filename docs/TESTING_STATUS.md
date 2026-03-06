@@ -9,3 +9,9 @@
 - Local Docker test passed
 - triangleethic_preview JSON: {"areteological":87,"deontological":92,"dual_welfare":"AI sentient = human (balanced)","memetic_fitness":0.94,"teleological":95}
 - Status: PASS
+
+## Chunk 5 Verification - 05 March 2026
+- Codex CLI changes applied
+- Local Docker test passed
+- Audit log line: 2026-03-06T02:56:44.529797Z  INFO sao_server::db::audit: AUDIT: Agent cfb63962-273d-4e40-be1d-8cf3cfb90b07 born with immutable soul.md + TriangleEthic preview
+- Status: PASS
