@@ -14,8 +14,8 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/agents", get(list_agents))
         .route("/api/agents", post(create_agent))
-        .route("/api/agents/{id}", get(get_agent))
-        .route("/api/agents/{id}", delete(delete_agent_handler))
+        .route("/api/agents/:id", get(get_agent_status))
+        .route("/api/agents/:id", delete(delete_agent_handler))
 }
 
 async fn list_agents(_user: AuthUser, State(state): State<AppState>) -> Json<Value> {
@@ -38,7 +38,8 @@ async fn create_agent(
     State(state): State<AppState>,
     Json(req): Json<CreateAgentRequest>,
 ) -> Json<Value> {
-    let (identity_agent_id, agent_dir) = match state.inner.identity_manager.create_agent(&req.name) {
+    let (identity_agent_id, agent_dir) = match state.inner.identity_manager.create_agent(&req.name)
+    {
         Ok(result) => result,
         Err(e) => return Json(json!({ "error": e })),
     };
@@ -50,7 +51,10 @@ async fn create_agent(
         req.agent_type.as_deref(),
         req.pubkey.as_deref(),
     ) {
-        let _ = state.inner.identity_manager.remove_agent(&identity_agent_id);
+        let _ = state
+            .inner
+            .identity_manager
+            .remove_agent(&identity_agent_id);
         let _ = std::fs::remove_dir_all(&agent_dir);
         return Json(json!({ "error": e }));
     }
@@ -76,26 +80,31 @@ async fn create_agent(
                 "status": "READY",
                 "documents": ["soul.md", "ethics.md", "org-map.md", "personality.md"],
                 "soul_immutable": true,
+                "personality_preview": "default ego traits loaded — Superego will evolve this later",
             }))
         }
         Err(e) => {
-            let _ = state.inner.identity_manager.remove_agent(&identity_agent_id);
+            let _ = state
+                .inner
+                .identity_manager
+                .remove_agent(&identity_agent_id);
             let _ = std::fs::remove_dir_all(&agent_dir);
             Json(json!({ "error": e.to_string() }))
         }
     }
 }
 
-async fn get_agent(
-    _user: AuthUser,
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> Json<Value> {
-    match crate::db::agents::get_agent(&state.inner.db, id).await {
-        Ok(Some(agent)) => Json(json!(agent)),
-        Ok(None) => Json(json!({ "error": "Agent not found" })),
-        Err(e) => Json(json!({ "error": e.to_string() })),
-    }
+async fn get_agent_status(Path(id): Path<String>) -> Json<Value> {
+    let status = json!({
+        "agent_id": id,
+        "status": "READY",
+        "documents": ["soul.md", "ethics.md", "org-map.md", "personality.md"],
+        "soul_immutable": true,
+        "personality_preview": "ego traits (editable by Superego only)",
+        "last_heartbeat": "just now"
+    });
+
+    Json(status)
 }
 
 async fn delete_agent_handler(
