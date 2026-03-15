@@ -274,3 +274,13 @@ WS     /ws/agent/:agent_id                  # WebSocket for real-time events
 | Primary auth | Microsoft Entra ID (OIDC). WebAuthn is secondary/fallback. |
 | LLM engine | Claude (Anthropic API) for MVP. BYOK for additional providers later. |
 | Test tenant | `jbcuppsgmail.onmicrosoft.com` |
+
+---
+
+## Current State (as of March 2026)
+- Server runs on port 3100 (docker-compose)
+- Birth flow, WebSocket heartbeat, and Superego stub are implemented
+- `POST /api/setup/initialize` exists but will be replaced by the agentic installer
+- Agent CRUD endpoints are functional
+- Frontend is scaffolded but not yet rebuilt for chat terminal UX
+- Entra OIDC integration is not yet implemented
