@@ -8,6 +8,21 @@ import subprocess
 
 HOST_OS = os.environ.get("HOST_OS", "windows" if os.name == "nt" else "linux")
 AZURE_CLI_PATHS = ("/usr/bin/az", "/usr/local/bin/az")
+DEFAULT_DEPLOYMENT_NAME = "sao-bootstrap"
+_CONTROL_CHARACTERS = re.compile(r"[\r\n\x00]")
+_READ_ONLY_PREFIXES_2 = {
+    ("account", "show"),
+    ("account", "list"),
+    ("containerapp", "show"),
+    ("group", "show"),
+    ("provider", "show"),
+    ("resource", "list"),
+}
+_READ_ONLY_PREFIXES_3 = {
+    ("ad", "signed-in-user", "show"),
+    ("deployment", "group", "show"),
+    ("role", "assignment", "list"),
+}
 
 
 def _normalize_host_os(host_os: str | None = None) -> str:
@@ -27,31 +42,33 @@ def _quote_for_powershell(arg: str) -> str:
     return "'" + arg.replace("'", "''") + "'"
 
 
+def _validate_args(args: list[str]) -> None:
+    """Ensure Azure CLI args use a strict argv contract."""
+    if not isinstance(args, list):
+        raise TypeError("Azure CLI args must be provided as a list of strings.")
+    if not args:
+        raise ValueError("Azure CLI args cannot be empty.")
+    for arg in args:
+        if not isinstance(arg, str):
+            raise TypeError("Azure CLI args must be provided as a list of strings.")
+        if _CONTROL_CHARACTERS.search(arg):
+            raise ValueError("Azure CLI args cannot contain control characters.")
+
+
 def _format_display_command(args: list[str], host_os: str) -> str:
     """Format a visible az command for the user's host shell."""
+    _validate_args(args)
     display_args = ["az", *args]
     if host_os == "windows":
         return " ".join(_quote_for_powershell(arg) for arg in display_args)
     return shlex.join(display_args)
 
 
-def _confirm_command(display_command: str, host_os: str) -> bool:
-    """Show the command and require explicit user confirmation."""
-    shell_name = "PowerShell" if host_os == "windows" else "bash"
-    border = "=" * 72
-    print(f"\n{border}")
-    print(f"Azure CLI command ({shell_name} syntax):")
-    print(display_command)
-    print(border)
-
-    while True:
-        try:
-            answer = input("Run this command? (y/n) ").strip().lower()
-        except EOFError:
-            return False
-        if answer in {"y", "n"}:
-            return answer == "y"
-        print("Please enter 'y' or 'n'.")
+def format_az_command(
+    args: list[str], host_os: str | None = None
+) -> str:
+    """Public helper to render a visible Azure CLI command."""
+    return _format_display_command(args, _normalize_host_os(host_os))
 
 
 def _is_device_code_login(args: list[str]) -> bool:
@@ -87,8 +104,6 @@ def _run_with_streaming_output(command: list[str]) -> tuple[int, str]:
     """Run a command and stream combined output to the terminal."""
     process = subprocess.Popen(
         command,
-        shell=False,
-        executable="/bin/bash",
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -116,16 +131,22 @@ def _run_with_streaming_output(command: list[str]) -> tuple[int, str]:
     return returncode, "".join(output_lines)
 
 
+def _format_failure_output(stdout: str, stderr: str) -> str:
+    """Combine Azure CLI stdout/stderr into one readable message."""
+    parts = [
+        part.strip() for part in (stderr, stdout) if part and part.strip()
+    ]
+    return "\n".join(parts)
+
+
 def _run(
     args: list[str],
     parse_json: bool = True,
     host_os: str | None = None,
 ) -> str:
     """Run an az CLI command, return output as string."""
+    _validate_args(args)
     normalized_host_os = _normalize_host_os(host_os)
-    display_command = _format_display_command(args, normalized_host_os)
-    if not _confirm_command(display_command, normalized_host_os):
-        return "COMMAND CANCELLED: User declined to run command."
     if _is_device_code_login(args):
         _print_device_code_instructions(normalized_host_os)
 
@@ -141,14 +162,10 @@ def _run(
         return message
 
     run_args = [azure_cli_path, *args]
-    bash_command = shlex.join(run_args)
-    print(f"DEBUG: executing via /bin/bash -lc {shlex.quote(bash_command)}")
 
     if _is_device_code_login(args):
         try:
-            returncode, streamed_output = _run_with_streaming_output(
-                ["/bin/bash", "-lc", bash_command]
-            )
+            returncode, streamed_output = _run_with_streaming_output(run_args)
         except FileNotFoundError as exc:
             return f"COMMAND FAILED: {exc}"
         if returncode == -1:
@@ -162,9 +179,7 @@ def _run(
 
     try:
         result = subprocess.run(
-            ["/bin/bash", "-lc", bash_command],
-            shell=False,
-            executable="/bin/bash",
+            run_args,
             capture_output=True,
             text=True,
             timeout=300,
@@ -175,9 +190,11 @@ def _run(
         return f"COMMAND FAILED: {exc}"
 
     if result.returncode != 0:
-        return f"COMMAND FAILED (exit {result.returncode}):\n{result.stderr.strip()}"
+        error_output = _format_failure_output(result.stdout, result.stderr)
+        return f"COMMAND FAILED (exit {result.returncode}):\n{error_output}"
+
     output = result.stdout.strip()
-    if parse_json:
+    if parse_json and output:
         try:
             parsed = json.loads(output)
             return json.dumps(parsed, indent=2)
@@ -186,9 +203,38 @@ def _run(
     return output
 
 
+def _rest_uses_get(args: list[str]) -> bool:
+    """Return True when az rest is explicitly or implicitly a GET."""
+    normalized = [arg.lower() for arg in args]
+    method = "get"
+    for index, arg in enumerate(normalized):
+        if arg in {"--method", "-m"} and index + 1 < len(normalized):
+            method = normalized[index + 1]
+    return method == "get"
+
+
+def is_safe_read_only_az_args(args: list[str]) -> bool:
+    """Classify fallback Azure CLI args as read-only when clearly safe."""
+    try:
+        _validate_args(args)
+    except (TypeError, ValueError):
+        return False
+
+    normalized = [arg.lower() for arg in args]
+    if tuple(normalized[:2]) in _READ_ONLY_PREFIXES_2:
+        return True
+    if tuple(normalized[:3]) in _READ_ONLY_PREFIXES_3:
+        return True
+    if normalized[0] == "rest":
+        return _rest_uses_get(normalized)
+    return False
+
+
 def az_login(host_os: str | None = None) -> str:
     """Initiate device code login."""
-    return _run(["login", "--use-device-code"], parse_json=False, host_os=host_os)
+    return _run(
+        ["login", "--use-device-code"], parse_json=False, host_os=host_os
+    )
 
 
 def get_signed_in_user(host_os: str | None = None) -> str:
@@ -200,6 +246,8 @@ def get_signed_in_user(host_os: str | None = None) -> str:
             "show",
             "--query",
             "{oid:id, upn:userPrincipalName, name:displayName}",
+            "--output",
+            "json",
         ],
         host_os=host_os,
     )
@@ -241,18 +289,55 @@ def create_resource_group(
     )
 
 
+def delete_resource_group(
+    name: str, host_os: str | None = None
+) -> str:
+    """Delete a resource group and everything contained within it."""
+    result = _run(
+        ["group", "delete", "--name", name, "--yes"],
+        parse_json=False,
+        host_os=host_os,
+    )
+    if "COMMAND FAILED" in result or "COMMAND CANCELLED" in result:
+        return result
+    return (
+        f"Cleanup requested for resource group {name}. Azure will remove the "
+        "SAO test deployment and every child resource inside that group."
+    )
+
+
 def provision_infrastructure(
     resource_group: str,
     location: str,
     admin_oid: str,
     host_os: str | None = None,
+    deployment_name: str = DEFAULT_DEPLOYMENT_NAME,
 ) -> str:
     """Deploy the SAO Bicep template."""
+    return start_infrastructure_provisioning(
+        resource_group=resource_group,
+        location=location,
+        admin_oid=admin_oid,
+        host_os=host_os,
+        deployment_name=deployment_name,
+    )
+
+
+def start_infrastructure_provisioning(
+    resource_group: str,
+    location: str,
+    admin_oid: str,
+    host_os: str | None = None,
+    deployment_name: str = DEFAULT_DEPLOYMENT_NAME,
+) -> str:
+    """Start the SAO Bicep deployment without waiting for completion."""
     return _run(
         [
             "deployment",
             "group",
             "create",
+            "--name",
+            deployment_name,
             "--resource-group",
             resource_group,
             "--template-file",
@@ -261,6 +346,76 @@ def provision_infrastructure(
             f"location={location}",
             f"adminOid={admin_oid}",
             "saoImageTag=latest",
+            "--no-wait",
+            "--output",
+            "json",
+        ],
+        parse_json=False,
+        host_os=host_os,
+    )
+
+
+def get_group_deployment_status(
+    resource_group: str,
+    deployment_name: str = DEFAULT_DEPLOYMENT_NAME,
+    host_os: str | None = None,
+) -> str:
+    """Get the current provisioning state for an Azure group deployment."""
+    return _run(
+        [
+            "deployment",
+            "group",
+            "show",
+            "--resource-group",
+            resource_group,
+            "--name",
+            deployment_name,
+            "--query",
+            "{state:properties.provisioningState, timestamp:properties.timestamp}",
+            "--output",
+            "json",
+        ],
+        host_os=host_os,
+    )
+
+
+def get_group_deployment_endpoint(
+    resource_group: str,
+    deployment_name: str = DEFAULT_DEPLOYMENT_NAME,
+    host_os: str | None = None,
+) -> str:
+    """Read the SAO endpoint output from the completed Bicep deployment."""
+    return _run(
+        [
+            "deployment",
+            "group",
+            "show",
+            "--resource-group",
+            resource_group,
+            "--name",
+            deployment_name,
+            "--query",
+            "properties.outputs.saoEndpoint.value",
+            "--output",
+            "tsv",
+        ],
+        parse_json=False,
+        host_os=host_os,
+    )
+
+
+def list_resource_group_resource_types(
+    resource_group: str, host_os: str | None = None
+) -> str:
+    """List Azure resource types currently visible in the resource group."""
+    return _run(
+        [
+            "resource",
+            "list",
+            "--resource-group",
+            resource_group,
+            "--query",
+            "[].type",
             "--output",
             "json",
         ],
@@ -299,25 +454,18 @@ def check_deployment_status(
     return f"Endpoint: https://{fqdn_result}\nHealth: {health_result}"
 
 
-# Characters that indicate shell injection attempts
-_SHELL_METACHARACTERS = re.compile(r"[|;&`$()]")
+def run_az_command(args: list[str], host_os: str | None = None) -> str:
+    """Run an arbitrary az command using strict argv tokens."""
+    if not isinstance(args, list) or any(not isinstance(arg, str) for arg in args):
+        return "REJECTED: args must be a non-empty array of strings."
 
+    normalized_args = list(args)
+    if normalized_args and normalized_args[0] == "az":
+        normalized_args = normalized_args[1:]
+    if not normalized_args:
+        return "REJECTED: args must contain at least one Azure CLI token."
 
-def run_az_command(command: str, host_os: str | None = None) -> str:
-    """Run an arbitrary az command with basic sanitization."""
-    if _SHELL_METACHARACTERS.search(command):
-        return (
-            "REJECTED: Command contains shell metacharacters. "
-            "Use only simple az CLI arguments."
-        )
     try:
-        args = shlex.split(command, posix=True)
-    except ValueError as exc:
-        return f"REJECTED: Unable to parse command: {exc}"
-
-    if args and args[0] == "az":
-        args = args[1:]
-    if not args:
-        return "REJECTED: Command is empty."
-
-    return _run(args, parse_json=False, host_os=host_os)
+        return _run(normalized_args, parse_json=False, host_os=host_os)
+    except (TypeError, ValueError) as exc:
+        return f"REJECTED: {exc}"
