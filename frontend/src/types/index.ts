@@ -1,10 +1,10 @@
 export interface User {
   id: string;
   username: string;
-  display_name: string;
+  display_name?: string;
   role: 'user' | 'admin';
-  created_at: string;
-  updated_at: string;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface AuthTokens {
@@ -18,9 +18,9 @@ export interface VaultSecret {
   id: string;
   secret_type: string;
   label: string;
-  provider: string;
+  provider: string | null;
   value?: string;
-  metadata: Record<string, string>;
+  metadata: Record<string, unknown>;
   created_at: string;
   updated_at: string;
 }
@@ -33,6 +33,23 @@ export interface Agent {
   capabilities: string[];
   created_at: string;
   updated_at: string;
+}
+
+export interface AgentBirthResponse {
+  status: 'READY';
+  documents: string[];
+  soul_immutable: boolean;
+  personality_preview?: string;
+  triangleethic_preview?: Record<string, unknown>;
+}
+
+export interface AgentStatusResponse {
+  agent_id: string;
+  status: 'READY';
+  documents: string[];
+  soul_immutable: boolean;
+  personality_preview?: string;
+  last_heartbeat?: string;
 }
 
 export interface OidcProvider {
@@ -52,8 +69,8 @@ export interface AuditLogEntry {
   user_id: string | null;
   agent_id: string | null;
   action: string;
-  resource: string;
-  details: string | null;
+  resource: string | null;
+  details: unknown;
   ip_address: string | null;
   user_agent: string | null;
   created_at: string;
@@ -120,16 +137,16 @@ export interface VaultStatus {
 export interface CreateSecretData {
   secret_type: string;
   label: string;
-  provider: string;
+  provider?: string;
   value: string;
-  metadata?: Record<string, string>;
+  metadata?: Record<string, unknown>;
 }
 
 export interface UpdateSecretData {
   label?: string;
   provider?: string;
   value?: string;
-  metadata?: Record<string, string>;
+  metadata?: Record<string, unknown>;
 }
 
 export interface CreateOidcProviderData {

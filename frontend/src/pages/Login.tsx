@@ -1,8 +1,11 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
-import { webauthnLoginStart, webauthnLoginFinish } from '../api/auth';
-import { listOidcProviders } from '../api/admin';
+import {
+  webauthnLoginStart,
+  webauthnLoginFinish,
+  listAuthOidcProviders,
+} from '../api/auth';
 import { beginAuthentication } from '../lib/webauthn';
 import type { OidcProvider } from '../types';
 
@@ -19,7 +22,7 @@ export default function Login() {
   const from = (location.state as { from?: { pathname: string } })?.from?.pathname || '/';
 
   useEffect(() => {
-    listOidcProviders()
+    listAuthOidcProviders()
       .then((providers) =>
         setOidcProviders(providers.filter((p) => p.enabled)),
       )
@@ -56,7 +59,7 @@ export default function Login() {
   };
 
   const handleOidcLogin = (providerId: string) => {
-    window.location.href = `/api/auth/oidc/${providerId}/login`;
+    window.location.href = `/api/auth/oidc/${providerId}/authorize`;
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {

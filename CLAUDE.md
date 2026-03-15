@@ -1,5 +1,7 @@
 # SAO - Claude Code Project Guide
 
+> This file is the single source of truth for all Claude Code work on SAO. Any architectural decision, API change, or feature addition must be reflected here before implementation.
+
 ## Project Overview
 SAO (Secure Agent Orchestrator) is the centralized key management and multi-agent orchestration platform. It provides a secure vault for all cryptographic keys (Ed25519 identity keys, API provider keys, GPG keys, OAuth tokens), agent identity management, and coordination. It does NOT contain agent-specific logic (that's in `abigail`).
 
@@ -248,7 +250,7 @@ WS     /ws/agent/:agent_id                  # WebSocket for real-time events
 ---
 
 ## Test Environment
-- **Tenant**: `jbcuppsgmail.onmicrosoft.com` (personal Entra ID tenant)
+- **Tenant**: `your-tenant.onmicrosoft.com` (demo Entra ID tenant)
 - Entra test accounts to be provisioned via installer agent during development
 - Docker-compose includes a dev profile with hot-reload and debug logging
 
@@ -273,14 +275,17 @@ WS     /ws/agent/:agent_id                  # WebSocket for real-time events
 | Frontend UX | Chat terminal + structured forms hybrid, optional visible bash pane |
 | Primary auth | Microsoft Entra ID (OIDC). WebAuthn is secondary/fallback. |
 | LLM engine | Claude (Anthropic API) for MVP. BYOK for additional providers later. |
-| Test tenant | `jbcuppsgmail.onmicrosoft.com` |
+| Test tenant | `your-tenant.onmicrosoft.com` |
+| 2026-03-15 | Hygiene sprint completed; README and installer narrative aligned with agentic vision |
 
 ---
 
-## Current State (as of March 2026)
+## Current State (as of 2026-03-15)
 - Server runs on port 3100 (docker-compose)
 - Birth flow, WebSocket heartbeat, and Superego stub are implemented
-- `POST /api/setup/initialize` exists but will be replaced by the agentic installer
+- `POST /api/setup/initialize` exists (legacy, to be replaced by agentic installer)
 - Agent CRUD endpoints are functional
-- Frontend is scaffolded but not yet rebuilt for chat terminal UX
+- Frontend scaffolded with 10 pages (old wizard still present, not yet rebuilt for chat terminal)
 - Entra OIDC integration is not yet implemented
+- `installer/` directory contains scaffold — agentic installer implementation is next milestone
+- No `bicep/` directory yet

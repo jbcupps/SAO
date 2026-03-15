@@ -33,6 +33,16 @@ export default function AuditLogPage() {
     return d.toLocaleString();
   };
 
+  const formatDetails = (details: unknown) => {
+    if (details === null || details === undefined) return '--';
+    if (typeof details === 'string') return details;
+    try {
+      return JSON.stringify(details);
+    } catch {
+      return String(details);
+    }
+  };
+
   const actionColor = (action: string) => {
     if (action.startsWith('create') || action.startsWith('register'))
       return 'text-green-400 bg-green-900/30 border-green-800';
@@ -121,7 +131,7 @@ export default function AuditLogPage() {
                             : '--'}
                       </td>
                       <td className="px-6 py-3 text-gray-500 truncate max-w-xs">
-                        {entry.details || '--'}
+                        {formatDetails(entry.details)}
                       </td>
                       <td className="px-6 py-3 text-gray-500 whitespace-nowrap">
                         {formatTime(entry.created_at)}

@@ -69,7 +69,7 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Build release binary
-        run: cargo build --release --target ${{ matrix.target }} --features postgres
+        run: cargo build --release --target ${{ matrix.target }}
 
       - name: Archive binary (Linux/macOS)
         if: runner.os != 'Windows'

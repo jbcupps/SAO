@@ -1,0 +1,27 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "baseName": {
+      "value": "sao"
+    },
+    "location": {
+      "value": "eastus2"
+    },
+    "postgresAdminLogin": {
+      "value": ""
+    },
+    "postgresAdminPassword": {
+      "value": ""
+    },
+    "saoContainerImage": {
+      "value": "ghcr.io/jbcupps/sao:latest"
+    },
+    "entraTenantId": {
+      "value": ""
+    },
+    "entraClientId": {
+      "value": ""
+    }
+  }
+}

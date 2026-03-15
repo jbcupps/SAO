@@ -82,6 +82,16 @@ export default function Dashboard() {
     return d.toLocaleString();
   };
 
+  const formatDetails = (details: unknown) => {
+    if (details === null || details === undefined) return '--';
+    if (typeof details === 'string') return details;
+    try {
+      return JSON.stringify(details);
+    } catch {
+      return String(details);
+    }
+  };
+
   return (
     <div>
       <h1 className="text-2xl font-bold text-white mb-6">Dashboard</h1>
@@ -292,7 +302,7 @@ export default function Dashboard() {
                       {entry.resource}
                     </td>
                     <td className="px-6 py-3 text-gray-500 truncate max-w-xs">
-                      {entry.details || '--'}
+                      {formatDetails(entry.details)}
                     </td>
                     <td className="px-6 py-3 text-gray-500 whitespace-nowrap">
                       {formatTime(entry.created_at)}

@@ -2,6 +2,7 @@ import { apiRequest } from './client';
 import type {
   AuthTokens,
   BootstrapModelConfig,
+  OidcProvider,
   SetupInitializationResult,
   SetupStatus,
   User,
@@ -31,17 +32,21 @@ export async function initializeVault(
 export async function webauthnRegisterStart(
   username: string,
 ): Promise<{ challenge_id: string; options: PublicKeyCredentialCreationOptions }> {
-  return apiRequest('/api/auth/webauthn/register/begin', {
+  const res = await apiRequest<{
+    challenge_id: string;
+    challenge: PublicKeyCredentialCreationOptions;
+  }>('/api/auth/webauthn/register/start', {
     method: 'POST',
     body: JSON.stringify({ username }),
   });
+  return { challenge_id: res.challenge_id, options: res.challenge };
 }
 
 export async function webauthnRegisterFinish(
   challenge_id: string,
   credential: unknown,
 ): Promise<AuthTokens> {
-  return apiRequest<AuthTokens>('/api/auth/webauthn/register/complete', {
+  return apiRequest<AuthTokens>('/api/auth/webauthn/register/finish', {
     method: 'POST',
     body: JSON.stringify({ challenge_id, credential }),
   });
@@ -50,17 +55,21 @@ export async function webauthnRegisterFinish(
 export async function webauthnLoginStart(
   username: string,
 ): Promise<{ challenge_id: string; options: PublicKeyCredentialRequestOptions }> {
-  return apiRequest('/api/auth/webauthn/login/begin', {
+  const res = await apiRequest<{
+    challenge_id: string;
+    challenge: PublicKeyCredentialRequestOptions;
+  }>('/api/auth/webauthn/login/start', {
     method: 'POST',
     body: JSON.stringify({ username }),
   });
+  return { challenge_id: res.challenge_id, options: res.challenge };
 }
 
 export async function webauthnLoginFinish(
   challenge_id: string,
   credential: unknown,
 ): Promise<AuthTokens> {
-  return apiRequest<AuthTokens>('/api/auth/webauthn/login/complete', {
+  return apiRequest<AuthTokens>('/api/auth/webauthn/login/finish', {
     method: 'POST',
     body: JSON.stringify({ challenge_id, credential }),
   });
@@ -84,4 +93,11 @@ export async function logout(refresh_token: string): Promise<void> {
 
 export async function getMe(): Promise<User> {
   return apiRequest<User>('/api/auth/me');
+}
+
+export async function listAuthOidcProviders(): Promise<OidcProvider[]> {
+  const res = await apiRequest<{ providers: OidcProvider[] }>(
+    '/api/auth/oidc/providers',
+  );
+  return res.providers;
 }

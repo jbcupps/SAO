@@ -24,32 +24,43 @@ export async function sealVault(): Promise<void> {
 }
 
 export async function listSecrets(): Promise<VaultSecret[]> {
-  return apiRequest<VaultSecret[]>('/api/keys');
+  const res = await apiRequest<{ secrets: VaultSecret[] }>('/api/vault/secrets');
+  return res.secrets;
 }
 
 export async function createSecret(data: CreateSecretData): Promise<VaultSecret> {
-  return apiRequest<VaultSecret>('/api/keys', {
+  const res = await apiRequest<{ id: string }>('/api/vault/secrets', {
     method: 'POST',
     body: JSON.stringify(data),
   });
+  return {
+    id: res.id,
+    secret_type: data.secret_type,
+    label: data.label,
+    provider: data.provider || null,
+    metadata: data.metadata ?? {},
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
 }
 
 export async function getSecret(id: string): Promise<VaultSecret> {
-  return apiRequest<VaultSecret>(`/api/keys/${id}`);
+  return apiRequest<VaultSecret>(`/api/vault/secrets/${id}`);
 }
 
 export async function updateSecret(
   id: string,
   data: UpdateSecretData,
 ): Promise<VaultSecret> {
-  return apiRequest<VaultSecret>(`/api/keys/${id}`, {
+  await apiRequest<{ updated: boolean }>(`/api/vault/secrets/${id}`, {
     method: 'PUT',
     body: JSON.stringify(data),
   });
+  return getSecret(id);
 }
 
 export async function deleteSecret(id: string): Promise<void> {
-  return apiRequest<void>(`/api/keys/${id}`, {
+  return apiRequest<void>(`/api/vault/secrets/${id}`, {
     method: 'DELETE',
   });
 }

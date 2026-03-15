@@ -10,14 +10,15 @@ import type {
 } from '../types';
 
 export async function listUsers(): Promise<User[]> {
-  return apiRequest<User[]>('/api/admin/users');
+  const res = await apiRequest<{ users: User[] }>('/api/admin/users');
+  return res.users;
 }
 
 export async function updateUserRole(
   id: string,
   role: 'user' | 'admin',
-): Promise<User> {
-  return apiRequest<User>(`/api/admin/users/${id}`, {
+): Promise<{ updated: boolean }> {
+  return apiRequest<{ updated: boolean }>(`/api/admin/users/${id}/role`, {
     method: 'PUT',
     body: JSON.stringify({ role }),
   });
@@ -31,29 +32,32 @@ export async function deleteUser(id: string): Promise<void> {
 
 export async function createOidcProvider(
   data: CreateOidcProviderData,
-): Promise<OidcProvider> {
-  return apiRequest<OidcProvider>('/api/admin/sso', {
+): Promise<{ id: string }> {
+  return apiRequest<{ id: string }>('/api/admin/oidc/providers', {
     method: 'POST',
     body: JSON.stringify(data),
   });
 }
 
 export async function listOidcProviders(): Promise<OidcProvider[]> {
-  return apiRequest<OidcProvider[]>('/api/admin/sso');
+  const res = await apiRequest<{ providers: OidcProvider[] }>(
+    '/api/admin/oidc/providers',
+  );
+  return res.providers;
 }
 
 export async function updateOidcProvider(
   id: string,
   data: UpdateOidcProviderData,
-): Promise<OidcProvider> {
-  return apiRequest<OidcProvider>(`/api/admin/sso/${id}`, {
+): Promise<{ updated: boolean }> {
+  return apiRequest<{ updated: boolean }>(`/api/admin/oidc/providers/${id}`, {
     method: 'PUT',
     body: JSON.stringify(data),
   });
 }
 
 export async function deleteOidcProvider(id: string): Promise<void> {
-  return apiRequest<void>(`/api/admin/sso/${id}`, {
+  return apiRequest<void>(`/api/admin/oidc/providers/${id}`, {
     method: 'DELETE',
   });
 }
@@ -69,9 +73,10 @@ export async function queryAuditLog(
     searchParams.set('limit', String(params.limit));
 
   const qs = searchParams.toString();
-  return apiRequest<AuditLogEntry[]>(
+  const res = await apiRequest<{ audit_log: AuditLogEntry[] }>(
     `/api/admin/audit${qs ? `?${qs}` : ''}`,
   );
+  return res.audit_log;
 }
 
 export async function getAdminEntityOverview(): Promise<AdminEntityOverview> {

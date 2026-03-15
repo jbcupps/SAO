@@ -1,118 +1,183 @@
-# SAO - Secure Agent Orchestrator
+# SAO — Secure Agent Orchestrator
 
-Local-first control plane for agent identity, birth documents, vault bootstrap, and real-time agent status.
+**A self-installing key management and agent orchestration platform, bootstrapped by a governed AI agent.**
 
-## Current Direction
+SAO is the centralized control plane for cryptographic key management, agent identity, and multi-agent orchestration. What sets it apart: the first-run experience is an **agentic conversation** — a Claude-powered installer agent walks the administrator through bootstrapping, configuring, and validating the entire platform inside a containerized environment.
 
-SAO is currently being built as the Phase 1 foundation for the broader SAO + Orion vision.
+---
 
-The focus in this repo right now is:
+## What SAO Does
 
-- local Docker bootstrap with PostgreSQL
-- agent birth flow that creates four signed documents: `soul.md`, `ethics.md`, `org-map.md`, and `personality.md`
-- a hard guard that prevents `soul.md` from being modified after birth
-- a basic agent WebSocket channel for heartbeat/status traffic
-- a minimal Superego proposal stub that can suggest changes to ego-level behavior without touching `soul.md`
+- **Key Vault**: Manages all cryptographic material — Ed25519 identity keys, API provider tokens, GPG keys, OAuth tokens — encrypted at rest (AES-256-GCM)
+- **Agent Identity**: Issues birth documents (`soul.md`, `ethics.md`, `org-map.md`, `personality.md`), enforces immutability of constitutional roots, and verifies agent signatures
+- **Orchestration**: Coordinates agents via REST and WebSocket, forwards ethical evaluations to the `Ethical_AI_Reg` platform, and manages logical agent groups ("hives")
+- **Agentic Installer**: On first launch, a Claude-powered agent guides the admin through Entra ID authentication, vault sealing, Graph API discovery, and full-stack validation — no static wizard, no generated throwaway credentials
 
-Target-state architecture notes in `documents/` and older ecosystem writeups describe later phases. This README describes the current implementation and immediate direction, not the full future platform.
+---
 
-## What Works Today
-
-- Docker compose stack at `docker/docker-compose.yml`
-- Axum server on `http://localhost:3100`
-- PostgreSQL-backed control-plane state
-- `POST /api/agents` birth flow returning a `READY` summary
-- initial setup flow that provisions an SAO admin entity and seeds tracked bootstrap work items
-- local identity directories under `SAO_DATA_DIR/identities/<agent_id>/`
-- agent WebSocket endpoint at `ws://localhost:3100/ws/agent/<agent_id>`
-- health, setup, auth, OIDC, admin, and vault server surfaces that support the control plane
-
-## Birth Flow
-
-Current birth flow behavior:
-
-1. `POST /api/agents` creates a local identity entry.
-2. SAO creates four birth documents in the agent directory.
-3. Each document is stamped with a signature generated from the SAO master key.
-4. `soul.md` is treated as the constitutional root and cannot be modified through the identity manager.
-5. The API returns a minimal readiness response.
-
-Current response shape:
-
-```json
-{
-  "status": "READY",
-  "documents": ["soul.md", "ethics.md", "org-map.md", "personality.md"],
-  "soul_immutable": true
-}
-```
-
-## Initial Setup
-
-Current first-run setup behavior:
-
-1. `POST /api/setup/initialize` seals the vault master key and creates the initial admin user.
-2. SAO provisions an `sao_admin_entity` identity tied to the configured frontier model credential.
-3. The setup flow seeds an initial work queue for getting SAO out of local Docker and into Azure container hosting.
-4. The highest-priority work item is the AZForge-to-Azure-container IaC track, followed by durable state, database, secret, origin, and container release tasks.
-
-Document roles:
-
-- `soul.md`: immutable constitutional root
-- `ethics.md`: ethical baseline document
-- `org-map.md`: initial registry and placement metadata
-- `personality.md`: evolvable ego/personality surface
-
-## WebSocket Heartbeat
-
-Agents connect on:
-
-```text
-ws://localhost:3100/ws/agent/<agent_id>
-```
-
-Current heartbeat behavior:
-
-- agent sends raw text `heartbeat`
-- SAO logs heartbeat receipt to the server console
-- SAO replies with JSON status
-- SAO calls a Superego stub that prints a personality tweak proposal
-
-Current response shape:
-
-```json
-{
-  "status": "ACTIVE",
-  "last_heartbeat": "2026-03-05T20:00:00Z"
-}
-```
-
-The Superego path is intentionally minimal at this stage. It does not patch files, does not touch `soul.md`, and does not yet persist lifecycle state.
-
-## Local Development
-
-Preferred development path: run everything locally in Docker.
+## Quick Start (Local Docker)
 
 ```bash
-docker-compose -f docker/docker-compose.yml up -d --build
+# Clone and start
+git clone https://github.com/jbcupps/sao.git
+cd sao
+docker compose -f docker/docker-compose.yml up -d --build
+
+# Verify
 curl http://localhost:3100/api/health
 ```
 
-Expected health response:
+Expected response:
 
 ```json
 {
   "status": "ok",
   "service": "sao",
   "version": "0.0.1",
-  "database": {
-    "connected": true,
-    "healthy": true
-  }
+  "database": { "connected": true, "healthy": true }
 }
 ```
 
-Native `cargo run` is possible, but on Windows it currently depends on a working OpenSSL toolchain. Docker is the safer default dev path for this repo.
+The server runs on **port 3100**. On first launch with no users in the database, the system enters installer mode.
+
+> **Note**: Native `cargo run` on Windows requires a working OpenSSL toolchain. Docker is the recommended development path.
+
+---
+
+## The Agentic Installer
+
+On first launch (no users in PostgreSQL), SAO enters **installer mode** — a conversational AI agent replaces the traditional setup wizard.
+
+### How It Works
+
+1. Container starts with empty database — installer mode activates
+2. Installer agent presents itself in the chat terminal
+3. Admin authenticates via **Microsoft Entra ID** (OIDC with PKCE)
+4. Installer seeds the admin record using the authenticated **Entra Object ID** — no generated passwords
+5. Installer generates the master Ed25519 signing key and initializes vault encryption
+6. Installer walks the admin through Entra app registration (or validates an existing one)
+7. Installer uses **Microsoft Graph API** to discover tenant structure and suggest role mappings
+8. Installer optionally provisions test accounts and configures agent registrations
+9. Installer validates the full stack (database, vault, auth, Graph API connectivity)
+10. System transitions from installer mode to **operational mode**
+
+### Design Principles
+
+- **Conversational, not procedural** — a dialogue that adapts, not a checklist
+- **Transparent** — an optional bash pane shows exactly what the agent executes
+- **Idempotent** — can be re-entered if interrupted; detects existing state and resumes
+- **Contained** — runs inside the Docker container; only reaches outside for Entra auth and Graph API
+
+---
+
+## Architecture Highlights
+
+### Birth Documents
+
+Every agent registered in SAO receives four signed documents:
+
+| Document | Role |
+|----------|------|
+| `soul.md` | Immutable constitutional root — cannot be modified after birth |
+| `ethics.md` | Ethical baseline |
+| `org-map.md` | Registry and placement metadata |
+| `personality.md` | Evolvable ego/personality surface |
+
+Each document is stamped with a signature from the SAO master key.
+
+### Authentication
+
+- **Human users**: Microsoft Entra ID (OIDC) as primary, WebAuthn/FIDO2 as secondary/fallback
+- **Agents**: Ed25519 signature verification against master key
+
+### Superego Stub
+
+A minimal Superego path proposes personality-level tweaks without touching the constitutional `soul.md`. Currently logs proposals; persistence and enforcement are future milestones.
+
+---
+
+## Current Implementation Status
+
+> **Honest assessment as of March 2026**
+
+| Component | Status |
+|-----------|--------|
+| Docker compose stack | Working (port 3100) |
+| Agent birth flow (4 documents) | Working |
+| WebSocket heartbeat/status | Working |
+| Superego proposal stub | Working (log-only) |
+| Agent CRUD endpoints | Working |
+| `POST /api/setup/initialize` | Legacy — to be replaced by agentic installer |
+| Frontend (10 pages scaffolded) | Scaffolded, old wizard still present |
+| Entra OIDC integration | Not yet implemented |
+| Agentic installer runtime | Not yet implemented (next milestone) |
+| Bicep/Azure deployment | Not yet implemented |
+
+---
+
+## API Surface
+
+### Core Endpoints
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/api/health` | Health check |
+| `GET` | `/api/setup/status` | Returns: `installer` or `operational` |
+| `POST` | `/api/agents` | Create agent + birth documents |
+| `GET` | `/api/agents` | List agents |
+| `GET` | `/api/agents/{id}` | Fetch one agent |
+| `DELETE` | `/api/agents/{id}` | Delete one agent |
+| `WS` | `/ws/agent/<agent_id>` | Agent real-time channel |
+
+### Authentication
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `POST` | `/api/auth/oidc/entra/login` | Redirect to Entra ID |
+| `GET` | `/api/auth/oidc/entra/callback` | Entra OIDC callback |
+| `POST` | `/api/auth/webauthn/register/start` | Begin WebAuthn registration |
+| `POST` | `/api/auth/webauthn/register/finish` | Complete WebAuthn registration |
+| `POST` | `/api/auth/webauthn/login/start` | Begin WebAuthn login |
+| `POST` | `/api/auth/webauthn/login/finish` | Complete WebAuthn login |
+
+### Vault
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/api/vault/status` | Vault seal status |
+| `POST` | `/api/vault/unseal` | Unseal vault |
+| `POST` | `/api/vault/seal` | Seal vault |
+| `GET/POST` | `/api/vault/secrets` | List / store secrets |
+| `GET/PUT/DELETE` | `/api/vault/secrets/{id}` | Manage individual secrets |
+
+### Admin
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/api/admin/users` | Manage users |
+| `GET/POST` | `/api/admin/oidc/providers` | SSO provider management |
+| `PUT/DELETE` | `/api/admin/oidc/providers/{id}` | SSO provider detail |
+| `GET` | `/api/admin/audit` | Full audit log |
+
+See `CLAUDE.md` for the complete API specification including installer-mode and agent-auth endpoints.
+
+---
+
+## Repository Layout
+
+| Path | Purpose |
+|------|---------|
+| `crates/sao-core` | Identity manager, master key handling, vault primitives, ethical bridge stubs |
+| `crates/sao-server` | Axum API server, DB access, auth, WebSocket handling |
+| `frontend/` | React + TypeScript SPA (chat terminal + form hybrid) |
+| `docker/` | Docker build and compose stack |
+| `docs/` | Implementation notes and supporting documentation |
+| `documents/` | Architecture analysis and planning docs |
+| `migrations/` | PostgreSQL migrations (sqlx) |
+| `installer/` | Agentic installer scaffold (Python + Claude SDK) |
+| `skills/` | Skill definitions |
+
+---
 
 ## Quick Verification
 
@@ -124,58 +189,31 @@ curl -X POST http://localhost:3100/api/agents \
   -d '{"name":"TestAgent","type":"personal","pubkey":"dummy-ed25519-key"}'
 ```
 
-Test heartbeat with `wscat`:
+Test heartbeat:
 
 ```bash
 wscat -c ws://localhost:3100/ws/agent/test123
+# Then send: heartbeat
 ```
 
-Then send:
+---
 
-```text
-heartbeat
-```
+## Related Repositories
 
-Expected server log lines:
+- [`abigail`](https://github.com/jbcupps/abigail) — Agent implementation (Tauri desktop app)
+- [`Orion_Dock`](https://github.com/jbcupps/Orion_Dock) — Orion agent platform
+- [`Ethical_AI_Reg`](https://github.com/jbcupps/Ethical_AI_Reg) — Ethical alignment platform
+- [`Phoenix`](https://github.com/jbcupps/Phoenix) — Coordination and project tracking
+- [`prometheus-bound`](https://github.com/jbcupps/prometheus-bound) — Infrastructure (GPG signing, host vault)
 
-```text
-Agent test123 heartbeat received
-Superego suggestion: Personality tweak proposal for test123: increase caution by 5% (based on roll-up)
-```
+## Related Documents
 
-## API Surface
+- `documents/SAO_Orion_Architecture_Analysis_v2.docx` — Full architecture analysis
+- `documents/ARCHITECTURE_SKILL_TOPOLOGY_AND_FORGE.md` — Skill topology and forge design
+- `docs/architecture.md` — Architecture overview
+- `docs/sao-deep-dive.md` — SAO deep dive
 
-Core endpoints for the current foundation:
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| `GET` | `/api/health` | Health check |
-| `POST` | `/api/agents` | Create an agent and birth documents |
-| `GET` | `/api/agents` | List agents |
-| `GET` | `/api/agents/{id}` | Fetch one agent |
-| `DELETE` | `/api/agents/{id}` | Delete one agent |
-| `WS` | `/ws/agent/<agent_id>` | Agent real-time channel |
-
-Additional control-plane routes already exist for setup, auth, OIDC, admin, vault, and ethical evaluation.
-
-## Repository Layout
-
-| Path | Purpose |
-|------|---------|
-| `crates/sao-core` | identity manager, master key handling, vault primitives, ethical bridge stubs |
-| `crates/sao-server` | Axum API server, DB access, auth, WebSocket handling |
-| `docker/` | local Docker build and compose stack |
-| `docs/` | implementation notes and supporting repo docs |
-| `documents/` | target-state architecture analysis and longer-form planning docs |
-
-## Near-Term Direction
-
-The next slices are expected to stay small, local, and testable:
-
-- persist agent heartbeat and lifecycle state instead of logging only
-- keep Superego proposals constrained to ego-level surfaces such as `personality.md`
-- tighten the birth artifact and registry flow beyond the current minimal stub
-- continue verifying every slice in local Docker before expanding scope
+---
 
 ## License
 

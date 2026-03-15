@@ -1,1 +1,9 @@
-anthropic>=0.40.0
+# SAO Installer Agent Dependencies
+anthropic>=0.40.0          # Claude API SDK
+azure-identity>=1.17.0     # Entra ID / Azure AD authentication
+msal>=1.30.0               # Microsoft Authentication Library
+msgraph-sdk>=1.5.0         # Microsoft Graph API client
+psycopg[binary]>=3.2.0     # PostgreSQL driver
+httpx>=0.27.0              # HTTP client for SAO server API calls
+pydantic>=2.9.0            # Data validation and settings
+python-dotenv>=1.0.0       # Environment variable management

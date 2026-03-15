@@ -14,8 +14,8 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/agents", get(list_agents))
         .route("/api/agents", post(create_agent))
-        .route("/api/agents/:id", get(get_agent_status))
-        .route("/api/agents/:id", delete(delete_agent_handler))
+        .route("/api/agents/{id}", get(get_agent_status))
+        .route("/api/agents/{id}", delete(delete_agent_handler))
 }
 
 async fn list_agents(_user: AuthUser, State(state): State<AppState>) -> Json<Value> {

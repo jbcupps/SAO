@@ -15,7 +15,6 @@ const SECRET_TYPES = [
   { value: 'ed25519', label: 'Ed25519 Key' },
   { value: 'gpg', label: 'GPG Key' },
   { value: 'oauth_token', label: 'OAuth Token' },
-  { value: 'password', label: 'Password' },
   { value: 'other', label: 'Other' },
 ];
 
@@ -191,7 +190,7 @@ function ViewSecretModal({
   const startEditing = () => {
     if (secret) {
       setEditLabel(secret.label);
-      setEditProvider(secret.provider);
+      setEditProvider(secret.provider || '');
       setEditValue(secret.value || '');
       setIsEditing(true);
     }

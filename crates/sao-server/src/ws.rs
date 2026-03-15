@@ -1,6 +1,6 @@
 //! WebSocket handler for real-time agent communication.
 //!
-//! Agents connect via `WS /ws/agent/:id` for bidirectional communication.
+//! Agents connect via `WS /ws/agent/{agent_id}` for bidirectional communication.
 //! SAO broadcasts events (ethical scores, orchestration commands) to connected agents.
 
 use axum::{
@@ -18,7 +18,7 @@ use tokio::sync::Mutex;
 use crate::state::AppState;
 
 pub fn ws_routes() -> Router<AppState> {
-    Router::new().route("/ws/agent/:agent_id", get(ws_handler))
+    Router::new().route("/ws/agent/{agent_id}", get(ws_handler))
 }
 
 async fn ws_handler(

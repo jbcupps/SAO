@@ -108,7 +108,9 @@ export default function AdminUsersPage() {
                         </select>
                       </td>
                       <td className="px-6 py-3 text-gray-500 whitespace-nowrap">
-                        {new Date(user.created_at).toLocaleDateString()}
+                        {user.created_at
+                          ? new Date(user.created_at).toLocaleDateString()
+                          : '--'}
                       </td>
                       <td className="px-6 py-3">
                         {isSelf ? (
