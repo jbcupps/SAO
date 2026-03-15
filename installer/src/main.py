@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """SAO Installer — Entry point."""
 
+import argparse
 import sys
 
 from agent import InstallerAgent
@@ -19,6 +20,21 @@ PROVIDERS = {
     "4": ("google", "Google"),
     "5": ("custom", "Custom endpoint"),
 }
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse installer CLI arguments."""
+    parser = argparse.ArgumentParser(description="SAO installer bootstrapper")
+    parser.add_argument(
+        "--cleanup",
+        action="store_true",
+        help="Delete a prior SAO test resource group instead of starting an install",
+    )
+    parser.add_argument(
+        "--resource-group",
+        help="Azure resource group to target for cleanup",
+    )
+    return parser.parse_args(argv)
 
 
 def collect_api_key() -> tuple[str, str]:
@@ -56,7 +72,22 @@ def collect_api_key() -> tuple[str, str]:
     return "claude", api_key
 
 
-def main():
+def main(argv: list[str] | None = None):
+    args = parse_args(argv)
+
+    if args.cleanup:
+        print(BANNER)
+        resource_group = (args.resource_group or "").strip()
+        if not resource_group:
+            resource_group = input(
+                "Enter the Azure resource group to clean up: "
+            ).strip()
+        agent = InstallerAgent(provider="cleanup", api_key=None)
+        success = agent.run_cleanup_mode(resource_group)
+        if not success:
+            sys.exit(1)
+        return
+
     provider, api_key = collect_api_key()
 
     agent = InstallerAgent(provider=provider, api_key=api_key)
