@@ -4,7 +4,6 @@ import json
 import os
 import re
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -141,6 +140,13 @@ TOOLS = [
                         "Entra Object ID of the bootstrap admin"
                     ),
                 },
+                "image_reference": {
+                    "type": "string",
+                    "description": (
+                        "Optional full container image reference override for "
+                        "the SAO application"
+                    ),
+                },
             },
             "required": ["resource_group", "location", "admin_oid"],
         },
@@ -163,11 +169,70 @@ TOOLS = [
         },
     },
     {
+        "name": "review_last_failure",
+        "description": (
+            "Review the structured diagnostics bundle for the most recent "
+            "bootstrap failure. Use this before any troubleshooting or "
+            "recovery action."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    {
+        "name": "apply_guided_fix",
+        "description": (
+            "Apply a supported recovery action for the most recent bootstrap "
+            "failure. Supported actions are purge_deleted_key_vault, "
+            "retry_with_name_suffix, retry_with_image_override, and "
+            "cleanup_resource_group."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "description": "Typed recovery action to apply",
+                    "enum": [
+                        "purge_deleted_key_vault",
+                        "retry_with_name_suffix",
+                        "retry_with_image_override",
+                        "cleanup_resource_group",
+                    ],
+                },
+                "name_suffix": {
+                    "type": "string",
+                    "description": (
+                        "Optional short suffix override for retry_with_name_suffix"
+                    ),
+                },
+                "image_reference": {
+                    "type": "string",
+                    "description": (
+                        "Full container image reference to use for "
+                        "retry_with_image_override"
+                    ),
+                },
+                "resource_group": {
+                    "type": "string",
+                    "description": (
+                        "Optional resource group override for cleanup_resource_group"
+                    ),
+                },
+            },
+            "required": ["action"],
+        },
+    },
+    {
         "name": "run_az_command",
         "description": (
-            "Run an arbitrary Azure CLI command only when the specific tools "
-            "above do not cover the operation. Provide args as an array of "
-            "exact CLI tokens without the leading 'az'."
+            "Run an arbitrary Azure CLI command only when the operator "
+            "explicitly asks for an unsupported Azure action. Do not use this "
+            "for normal deployment diagnostics that are already covered by "
+            "review_last_failure. Provide args as an array of exact CLI tokens "
+            "without the leading 'az'."
         ),
         "input_schema": {
             "type": "object",
@@ -189,6 +254,24 @@ CONTINUE_MESSAGE = "No questions right now. Please continue."
 DEFAULT_DEPLOYMENT_NAME = "sao-bootstrap"
 POLL_INTERVAL_SECONDS = 30
 REQUIRED_CHECKIN = "Does this look correct? Do you have any questions before we continue?"
+REVIEW_CHECKINS = (
+    REQUIRED_CHECKIN,
+    "Does that line up with what you expected? Any questions before we continue?",
+    "Does that all look right? Any questions before we continue?",
+    "Does that match what you wanted to see? Any questions before we continue?",
+)
+PHASE_CHECKINS = {
+    "authentication": REVIEW_CHECKINS[0],
+    "read_only_discovery": REVIEW_CHECKINS[1],
+    "subscription_selection": REVIEW_CHECKINS[3],
+    "resource_group": REVIEW_CHECKINS[2],
+    "cleanup": REVIEW_CHECKINS[2],
+    "provisioning": REVIEW_CHECKINS[1],
+    "troubleshooting_review": REVIEW_CHECKINS[3],
+    "troubleshooting_fix": REVIEW_CHECKINS[2],
+    "verification": REVIEW_CHECKINS[0],
+    "custom_command": REVIEW_CHECKINS[1],
+}
 PHASE_DETAILS = {
     "authentication": {
         "title": "Authentication",
@@ -240,6 +323,23 @@ PHASE_DETAILS = {
             "phase and it will create the runtime resources the platform needs."
         ),
     },
+    "troubleshooting_review": {
+        "title": "Troubleshooting Review",
+        "lead_in": "Let me quickly check",
+        "intro": (
+            "the structured deployment diagnostics we already collected so I "
+            "can explain the failure clearly instead of guessing at Azure CLI "
+            "syntax."
+        ),
+    },
+    "troubleshooting_fix": {
+        "title": "Troubleshooting Fix",
+        "lead_in": "Next I need to",
+        "intro": (
+            "apply the recovery path you chose and, when it makes sense, carry "
+            "that straight into a clean retry."
+        ),
+    },
     "verification": {
         "title": "Verification",
         "lead_in": "Let me quickly check",
@@ -250,7 +350,7 @@ PHASE_DETAILS = {
     },
     "custom_command": {
         "title": "Custom Azure Command",
-        "lead_in": "Before I run this custom Azure command:",
+        "lead_in": "Let me confirm this custom Azure command:",
         "intro": (
             "I want to make the exact action and its impact clear because it "
             "falls outside the dedicated installer tools."
@@ -258,25 +358,22 @@ PHASE_DETAILS = {
     },
 }
 
-
-@dataclass(frozen=True)
 class ToolExecutionPolicy:
     """Runtime controls for installer tool execution."""
 
-    phase: str
-    risk_class: str
-    batchable: bool
-    preview_text: str
-    order: int
-
-
-@dataclass(frozen=True)
-class ProvisioningRecoveryDecision:
-    """Result of a provisioning recovery analysis."""
-
-    action: str
-    name_suffix: str | None = None
-    message: str | None = None
+    def __init__(
+        self,
+        phase: str,
+        risk_class: str,
+        batchable: bool,
+        preview_text: str,
+        order: int,
+    ):
+        self.phase = phase
+        self.risk_class = risk_class
+        self.batchable = batchable
+        self.preview_text = preview_text
+        self.order = order
 
 
 TOOL_POLICIES = {
@@ -336,6 +433,20 @@ TOOL_POLICIES = {
         preview_text="SAO infrastructure deployment",
         order=70,
     ),
+    "review_last_failure": ToolExecutionPolicy(
+        phase="troubleshooting_review",
+        risk_class="read",
+        batchable=False,
+        preview_text="structured deployment failure review",
+        order=75,
+    ),
+    "apply_guided_fix": ToolExecutionPolicy(
+        phase="troubleshooting_fix",
+        risk_class="write",
+        batchable=False,
+        preview_text="guided recovery action",
+        order=77,
+    ),
     "check_deployment_status": ToolExecutionPolicy(
         phase="verification",
         risk_class="read",
@@ -355,7 +466,7 @@ class InstallerAgent:
         )
         self.model = "claude-sonnet-4-20250514"
         self.conversation: list[dict] = []
-        self.system_prompt = self._load_system_prompt()
+        self.base_system_prompt = self._load_system_prompt()
         self.pending_phase_summary: str | None = None
         self.installer_state = {
             "admin_oid": None,
@@ -365,7 +476,10 @@ class InstallerAgent:
             "location": None,
             "deployment_name": None,
             "name_suffix": "",
+            "image_override": None,
             "sao_endpoint": None,
+            "last_failure_bundle": None,
+            "troubleshooting_active": False,
         }
 
     def verify_connection(self) -> bool:
@@ -397,7 +511,7 @@ class InstallerAgent:
             response = self.client.messages.create(
                 model=self.model,
                 max_tokens=4096,
-                system=self.system_prompt,
+                system=self._build_runtime_system_prompt(),
                 tools=TOOLS,
                 messages=self.conversation,
             )
@@ -483,7 +597,7 @@ class InstallerAgent:
             "deployment lives inside that dedicated resource group, so Azure "
             "will remove only those contained resources together."
         )
-        follow_up = input(f"\n{REQUIRED_CHECKIN}\nYou: ")
+        follow_up = input(f"\n{self._checkin_for_phase('cleanup')}\nYou: ")
         normalized_follow_up = follow_up.strip()
         if normalized_follow_up:
             print(
@@ -539,19 +653,24 @@ class InstallerAgent:
         raise ValueError("User message content cannot be empty.")
 
     def _summary_response_is_valid(self, text_blocks: list[Any]) -> bool:
-        """Require a plain-English summary plus the exact phase check-in."""
+        """Require a plain-English summary plus an approved phase check-in."""
         combined_text = "\n".join(
             block.text.strip() for block in text_blocks if block.text.strip()
         )
-        return REQUIRED_CHECKIN in combined_text
+        return any(checkin in combined_text for checkin in REVIEW_CHECKINS)
+
+    def _checkin_for_phase(self, phase: str) -> str:
+        """Return the approved review prompt for the current phase."""
+        return PHASE_CHECKINS.get(phase, REQUIRED_CHECKIN)
 
     def _phase_summary_instruction(self, phase: str) -> str:
         """Tell the model to summarize the phase before continuing."""
         phase_title = PHASE_DETAILS[phase]["title"]
+        review_prompt = self._checkin_for_phase(phase)
         return (
             f"The {phase_title} phase is complete. Respond with plain text only. "
             "Give a brief 1-2 sentence summary of what happened and what it "
-            f"means. Then ask exactly: {REQUIRED_CHECKIN} "
+            f"means. Then ask exactly: {review_prompt} "
             "Do not call any tools in this response."
         )
 
@@ -563,6 +682,41 @@ class InstallerAgent:
         if lead_in.endswith(":"):
             return f"{lead_in} {intro}"
         return f"{lead_in} {intro}"
+
+    def _build_runtime_system_prompt(self) -> str:
+        """Append live troubleshooting context to the static system prompt."""
+        prompt = self.base_system_prompt
+        if not self.installer_state.get("troubleshooting_active"):
+            return prompt
+
+        failure_bundle = self.installer_state.get("last_failure_bundle")
+        if not isinstance(failure_bundle, dict) or not failure_bundle:
+            return (
+                prompt
+                + "\n\nTroubleshooting mode is active. Use review_last_failure "
+                "before any custom Azure diagnostics and use apply_guided_fix "
+                "for supported recovery actions."
+            )
+
+        runtime_bundle = {
+            "issue_type": failure_bundle.get("issue_type"),
+            "diagnosis": failure_bundle.get("diagnosis"),
+            "failed_resource": failure_bundle.get("failed_resource"),
+            "resource_group": failure_bundle.get("resource_group"),
+            "deployment_name": failure_bundle.get("deployment_name"),
+            "image_reference": failure_bundle.get("image_reference"),
+            "suggested_actions": failure_bundle.get("suggested_actions", [])[:4],
+            "evidence": failure_bundle.get("evidence", [])[:4],
+        }
+        return (
+            prompt
+            + "\n\nTroubleshooting mode is active for the most recent bootstrap "
+            "failure. Use review_last_failure before any new deployment "
+            "diagnostic query, prefer apply_guided_fix for supported recovery, "
+            "and only use run_az_command when the operator explicitly asks for "
+            "an unsupported Azure CLI action.\n\nLast failure snapshot:\n"
+            + json.dumps(runtime_bundle, indent=2)
+        )
 
     def _normalize_name_suffix(self, value: str | None) -> str:
         """Clamp suggested name suffixes to the short Azure-safe form we use."""
@@ -748,180 +902,41 @@ class InstallerAgent:
             }
         return None
 
-    def _analyze_provisioning_failure(
-        self,
-        resource_group: str,
-        deployment_name: str,
-        host_os: str,
-        initial_failure: str | None = None,
-    ) -> dict[str, Any]:
-        """Collect Azure deployment diagnostics and infer likely recovery paths."""
-        from tools.azure import (
-            get_group_deployment_error,
-            list_deleted_key_vaults,
-            list_group_deployment_operations,
-        )
-
-        evidence_lines = self._extract_error_messages(initial_failure)
-
-        deployment_error_result = get_group_deployment_error(
-            resource_group=resource_group,
-            deployment_name=deployment_name,
-            host_os=host_os,
-        )
-        if (
-            "COMMAND FAILED" not in deployment_error_result
-            and "COMMAND CANCELLED" not in deployment_error_result
-            and deployment_error_result.strip()
-            and deployment_error_result.strip() != "null"
-        ):
-            parsed_deployment_error = (
-                self._try_parse_json(deployment_error_result)
-                or deployment_error_result
-            )
-            evidence_lines.extend(
-                self._extract_error_messages(parsed_deployment_error)
-            )
-
-        operations_result = list_group_deployment_operations(
-            resource_group=resource_group,
-            deployment_name=deployment_name,
-            host_os=host_os,
-        )
-        failed_operations: list[str] = []
-        if (
-            "COMMAND FAILED" not in operations_result
-            and "COMMAND CANCELLED" not in operations_result
-        ):
-            parsed_operations = self._try_parse_json(operations_result)
-            failed_operations = self._extract_failed_operation_summaries(
-                parsed_operations
-            )
-            evidence_lines.extend(failed_operations)
-
-        evidence_lines = self._dedupe_lines(evidence_lines)
-        combined_evidence = "\n".join(evidence_lines)
-        lowered_evidence = combined_evidence.lower()
-        key_vault_name = self._extract_key_vault_name(combined_evidence)
-
-        soft_delete_markers = (
-            "soft-delete",
-            "soft delete",
-            "deleted but recoverable",
-            "scheduled for deletion",
-            "recoverable deleted",
-        )
-        conflict_markers = (
-            "already exists",
-            "already in use",
-            "conflict",
-            "is not available",
-            "reserved",
-        )
-
-        deleted_vault_match: dict[str, str] | None = None
-        if key_vault_name:
-            deleted_vaults_result = list_deleted_key_vaults(host_os=host_os)
-            if (
-                "COMMAND FAILED" not in deleted_vaults_result
-                and "COMMAND CANCELLED" not in deleted_vaults_result
-            ):
-                parsed_deleted_vaults = self._try_parse_json(
-                    deleted_vaults_result
-                )
-                deleted_vault_match = self._find_deleted_key_vault(
-                    parsed_deleted_vaults, key_vault_name
-                )
-
-        soft_delete_collision = any(
-            marker in lowered_evidence for marker in soft_delete_markers
-        ) or deleted_vault_match is not None
-        name_conflict = (
-            key_vault_name is not None
-            and any(marker in lowered_evidence for marker in conflict_markers)
-        )
-
-        suggestions: list[str] = []
-        if deleted_vault_match is not None:
-            location = deleted_vault_match["location"] or self.installer_state[
-                "location"
-            ]
-            suggestions.append(
-                "This looks like a soft-delete collision for Key Vault "
-                f"{deleted_vault_match['name']} in {location}."
-            )
-            suggestions.append(
-                "I can purge the deleted vault and retry, or keep it and use a "
-                "short suffix to generate a new global name."
-            )
-        elif name_conflict and key_vault_name:
-            suggestions.append(
-                f"The deployment is colliding with the global Key Vault name {key_vault_name}."
-            )
-            suggestions.append(
-                "A short suffix retry will generate a fresh set of resource names."
-            )
-        else:
-            suggestions.append(
-                "The deployment operations identify the first failing Azure resource."
-            )
-            suggestions.append(
-                "If this was a test run, cleanup is the safest reset before retrying."
-            )
-
-        return {
-            "evidence": evidence_lines[:6],
-            "failed_operations": failed_operations[:4],
-            "soft_delete_collision": soft_delete_collision,
-            "deleted_vault": deleted_vault_match,
-            "name_conflict": name_conflict,
-            "key_vault_name": key_vault_name,
-            "suggestions": suggestions,
-        }
-
-    def _format_provisioning_failure_message(
-        self,
-        deployment_name: str,
-        context_label: str,
-        diagnostics: dict[str, Any],
-    ) -> str:
-        """Render a concise but actionable provisioning failure summary."""
-        lines = [
-            "COMMAND FAILED: "
-            f"{context_label} for Azure deployment {deployment_name} did not succeed."
-        ]
-
-        evidence = diagnostics.get("evidence", [])
-        if evidence:
-            lines.append("Azure reported:")
-            for line in evidence[:3]:
-                lines.append(f"- {line}")
-
-        failed_operations = diagnostics.get("failed_operations", [])
-        if failed_operations:
-            lines.append("Failing operations:")
-            for line in failed_operations[:2]:
-                lines.append(f"- {line}")
-
-        suggestions = diagnostics.get("suggestions", [])
-        if suggestions:
-            lines.append("Suggested recovery:")
-            for line in suggestions[:2]:
-                lines.append(f"- {line}")
-
-        return "\n".join(lines)
-
     def _get_tool_policy(
         self, name: str, args: dict[str, Any]
     ) -> ToolExecutionPolicy:
         """Return execution policy metadata for a tool call."""
+        if name == "apply_guided_fix":
+            action = str(args.get("action") or "").strip()
+            preview_text = "guided recovery action"
+            if action == "purge_deleted_key_vault":
+                preview_text = "guided Key Vault purge and retry"
+            elif action == "retry_with_name_suffix":
+                preview_text = "guided retry with a unique suffix"
+            elif action == "retry_with_image_override":
+                preview_text = "guided retry with an alternate image"
+            elif action == "cleanup_resource_group":
+                preview_text = "guided resource group cleanup"
+            return ToolExecutionPolicy(
+                phase="troubleshooting_fix",
+                risk_class="write",
+                batchable=False,
+                preview_text=preview_text,
+                order=77,
+            )
+
         if name == "run_az_command":
             from tools.azure import is_safe_read_only_az_args
 
             command_args = args.get("args", [])
             if is_safe_read_only_az_args(command_args):
+                phase = (
+                    "troubleshooting_review"
+                    if self.installer_state.get("troubleshooting_active")
+                    else "read_only_discovery"
+                )
                 return ToolExecutionPolicy(
-                    phase="read_only_discovery",
+                    phase=phase,
                     risk_class="read",
                     batchable=True,
                     preview_text="custom read-only Azure inspection",
@@ -1045,12 +1060,20 @@ class InstallerAgent:
                 args.get("name_suffix")
                 or self.installer_state.get("name_suffix")
             )
+            image_reference = str(
+                args.get("image_reference")
+                or self.installer_state.get("image_override")
+                or ""
+            ).strip()
             parameter_args = [
                 "--parameters",
                 f"location={args['location']}",
                 f"adminOid={args['admin_oid']}",
-                "saoImageTag=latest",
             ]
+            if image_reference:
+                parameter_args.append(f"saoImage={image_reference}")
+            else:
+                parameter_args.append("saoImageTag=latest")
             if name_suffix:
                 parameter_args.append(f"nameSuffix={name_suffix}")
             return [
@@ -1135,6 +1158,238 @@ class InstallerAgent:
                     host_os=host_os,
                 ),
             ]
+
+        if name == "review_last_failure":
+            resource_group = str(
+                self.installer_state.get("resource_group") or ""
+            ).strip()
+            deployment_name = str(
+                self.installer_state.get("deployment_name")
+                or DEFAULT_DEPLOYMENT_NAME
+            ).strip()
+            if not resource_group:
+                return []
+            preview_commands = [
+                format_az_command(
+                    [
+                        "deployment",
+                        "group",
+                        "show",
+                        "--resource-group",
+                        resource_group,
+                        "--name",
+                        deployment_name,
+                        "--query",
+                        "properties.error",
+                        "--output",
+                        "json",
+                    ],
+                    host_os=host_os,
+                ),
+                format_az_command(
+                    [
+                        "deployment",
+                        "operation",
+                        "group",
+                        "list",
+                        "--resource-group",
+                        resource_group,
+                        "--name",
+                        deployment_name,
+                        "--output",
+                        "json",
+                    ],
+                    host_os=host_os,
+                ),
+            ]
+            bundle = self.installer_state.get("last_failure_bundle") or {}
+            failed_resource_type = str(
+                bundle.get("failed_resource_type") or ""
+            ).lower()
+            issue_type = str(bundle.get("issue_type") or "").lower()
+            if "keyvault" in failed_resource_type or "keyvault" in issue_type:
+                preview_commands.append(
+                    format_az_command(
+                        [
+                            "keyvault",
+                            "list-deleted",
+                            "--resource-type",
+                            "vault",
+                            "--output",
+                            "json",
+                        ],
+                        host_os=host_os,
+                    )
+                )
+            if (
+                "containerapp" in failed_resource_type
+                or "container_image" in issue_type
+                or "containerapp_revision_failed" == issue_type
+            ):
+                preview_commands.extend(
+                    [
+                        format_az_command(
+                            [
+                                "deployment",
+                                "group",
+                                "show",
+                                "--resource-group",
+                                resource_group,
+                                "--name",
+                                "container-app",
+                                "--query",
+                                "properties.error",
+                                "--output",
+                                "json",
+                            ],
+                            host_os=host_os,
+                        ),
+                        format_az_command(
+                            [
+                                "deployment",
+                                "operation",
+                                "group",
+                                "list",
+                                "--resource-group",
+                                resource_group,
+                                "--name",
+                                "container-app",
+                                "--output",
+                                "json",
+                            ],
+                            host_os=host_os,
+                        ),
+                        format_az_command(
+                            [
+                                "containerapp",
+                                "show",
+                                "--resource-group",
+                                resource_group,
+                                "--name",
+                                "sao-app",
+                                "--output",
+                                "json",
+                            ],
+                            host_os=host_os,
+                        ),
+                        format_az_command(
+                            [
+                                "containerapp",
+                                "revision",
+                                "list",
+                                "--resource-group",
+                                resource_group,
+                                "--name",
+                                "sao-app",
+                                "--all",
+                                "--output",
+                                "json",
+                            ],
+                            host_os=host_os,
+                        ),
+                        format_az_command(
+                            [
+                                "containerapp",
+                                "logs",
+                                "show",
+                                "--resource-group",
+                                resource_group,
+                                "--name",
+                                "sao-app",
+                                "--type",
+                                "system",
+                                "--tail",
+                                "50",
+                                "--output",
+                                "json",
+                            ],
+                            host_os=host_os,
+                        ),
+                    ]
+                )
+            return preview_commands
+
+        if name == "apply_guided_fix":
+            action = str(args.get("action") or "").strip()
+            bundle = self.installer_state.get("last_failure_bundle") or {}
+            resource_group = str(
+                args.get("resource_group")
+                or self.installer_state.get("resource_group")
+                or ""
+            ).strip()
+            if action == "cleanup_resource_group" and resource_group:
+                return self._build_preview_commands(
+                    "delete_resource_group",
+                    {"resource_group": resource_group},
+                    host_os,
+                )
+            if action == "purge_deleted_key_vault":
+                deleted_vault = bundle.get("deleted_vault") or {}
+                vault_name = str(
+                    deleted_vault.get("name")
+                    or bundle.get("failed_resource_name")
+                    or ""
+                ).strip()
+                location = str(
+                    deleted_vault.get("location")
+                    or self.installer_state.get("location")
+                    or ""
+                ).strip()
+                preview_commands: list[str] = []
+                if vault_name and location:
+                    preview_commands.append(
+                        format_az_command(
+                            [
+                                "keyvault",
+                                "purge",
+                                "--name",
+                                vault_name,
+                                "--location",
+                                location,
+                            ],
+                            host_os=host_os,
+                        )
+                    )
+                if resource_group and self.installer_state.get("admin_oid"):
+                    preview_commands.extend(
+                        self._build_preview_commands(
+                            "provision_infrastructure",
+                            {
+                                "resource_group": resource_group,
+                                "location": self.installer_state.get("location"),
+                                "admin_oid": self.installer_state.get("admin_oid"),
+                            },
+                            host_os,
+                        )
+                    )
+                return preview_commands
+            if action == "retry_with_name_suffix":
+                return self._build_preview_commands(
+                    "provision_infrastructure",
+                    {
+                        "resource_group": resource_group,
+                        "location": self.installer_state.get("location"),
+                        "admin_oid": self.installer_state.get("admin_oid"),
+                        "name_suffix": args.get("name_suffix")
+                        or self.installer_state.get("name_suffix")
+                        or self._suggest_name_suffix(),
+                    },
+                    host_os,
+                )
+            if action == "retry_with_image_override":
+                return self._build_preview_commands(
+                    "provision_infrastructure",
+                    {
+                        "resource_group": resource_group,
+                        "location": self.installer_state.get("location"),
+                        "admin_oid": self.installer_state.get("admin_oid"),
+                        "image_reference": args.get("image_reference")
+                        or bundle.get("image_reference")
+                        or self.installer_state.get("image_override"),
+                    },
+                    host_os,
+                )
+            return []
 
         if name == "run_az_command":
             return [format_az_command(args["args"], host_os=host_os)]
@@ -1233,7 +1488,7 @@ class InstallerAgent:
             model=self.model,
             max_tokens=1024,
             system=(
-                self.system_prompt
+                self.base_system_prompt
                 + "\n\nYou are temporarily answering a question during an active "
                 "Azure deployment poll. Answer the question in plain English only. "
                 "Do not call tools. Do not advance the installer to a new phase."
@@ -1286,90 +1541,552 @@ class InstallerAgent:
         if health_summary:
             print(f"Health check: {health_summary}")
 
-    def _offer_preflight_recovery(
+    def _summarize_failed_operation(self, operation: dict[str, Any]) -> str:
+        """Render one normalized ARM failure into a compact sentence."""
+        resource_type = str(operation.get("resource_type") or "").strip()
+        resource_name = str(operation.get("resource_name") or "").strip()
+        provisioning_state = str(
+            operation.get("provisioning_state") or ""
+        ).strip()
+        deployment_name = str(operation.get("deployment_name") or "").strip()
+        status_messages = operation.get("status_messages", [])
+
+        target_label = "/".join(
+            part for part in (resource_type, resource_name) if part
+        ) or "Deployment operation"
+        if deployment_name:
+            target_label = f"{target_label} via {deployment_name}"
+        if provisioning_state:
+            target_label = f"{target_label} ({provisioning_state})"
+        if status_messages:
+            target_label = f"{target_label}: {status_messages[0]}"
+        return target_label
+
+    def _flatten_failed_operations(
+        self, deployment_diagnostics: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        """Flatten failed operations across the deployment tree."""
+        operations: list[dict[str, Any]] = []
+        deployment_name = str(
+            deployment_diagnostics.get("deployment_name") or ""
+        ).strip()
+        for operation in deployment_diagnostics.get("failed_operations", []):
+            if not isinstance(operation, dict):
+                continue
+            normalized = dict(operation)
+            normalized["deployment_name"] = deployment_name
+            operations.append(normalized)
+
+        for nested in deployment_diagnostics.get("nested", []):
+            if isinstance(nested, dict):
+                operations.extend(self._flatten_failed_operations(nested))
+        return operations
+
+    def _first_nested_error(
+        self, deployment_diagnostics: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Return the first nested deployment that exposes an error payload."""
+        for nested in deployment_diagnostics.get("nested", []):
+            if not isinstance(nested, dict):
+                continue
+            if nested.get("error") is not None:
+                return {
+                    "deployment_name": nested.get("deployment_name"),
+                    "error": nested.get("error"),
+                }
+            nested_match = self._first_nested_error(nested)
+            if nested_match is not None:
+                return nested_match
+        return None
+
+    def _select_failed_resource(
+        self, failed_operations: list[dict[str, Any]]
+    ) -> dict[str, str]:
+        """Choose the most specific failed resource from the operation list."""
+        for operation in failed_operations:
+            resource_type = str(operation.get("resource_type") or "").strip()
+            resource_name = str(operation.get("resource_name") or "").strip()
+            if (
+                resource_type
+                and resource_name
+                and resource_type.lower() != "microsoft.resources/deployments"
+            ):
+                return {
+                    "type": resource_type,
+                    "name": resource_name,
+                    "deployment_name": str(
+                        operation.get("deployment_name") or ""
+                    ).strip(),
+                }
+
+        if failed_operations:
+            first_operation = failed_operations[0]
+            return {
+                "type": str(first_operation.get("resource_type") or "").strip(),
+                "name": str(first_operation.get("resource_name") or "").strip(),
+                "deployment_name": str(
+                    first_operation.get("deployment_name") or ""
+                ).strip(),
+            }
+
+        return {"type": "", "name": "", "deployment_name": ""}
+
+    def _extract_image_reference(
         self,
-        diagnostics: dict[str, Any],
-        resource_group: str,
-        location: str,
-        host_os: str,
-    ) -> ProvisioningRecoveryDecision:
-        """Offer safe retry options for preflight naming collisions."""
-        from tools.azure import format_az_command, purge_deleted_key_vault
+        container_app_diagnostics: dict[str, Any] | None,
+        evidence_lines: list[str],
+    ) -> str:
+        """Pull the most likely image reference from app state or errors."""
+        from tools.troubleshooting import DEFAULT_IMAGE_REFERENCE
 
-        deleted_vault = diagnostics.get("deleted_vault")
-        key_vault_name = diagnostics.get("key_vault_name")
+        if isinstance(container_app_diagnostics, dict):
+            app_payload = container_app_diagnostics.get("app")
+            if isinstance(app_payload, dict):
+                properties = app_payload.get("properties", {})
+                if not isinstance(properties, dict):
+                    properties = {}
+                template = properties.get("template", {})
+                if not isinstance(template, dict):
+                    template = {}
+                containers = template.get("containers", [])
+                if isinstance(containers, list):
+                    for container in containers:
+                        if not isinstance(container, dict):
+                            continue
+                        image_reference = str(
+                            container.get("image") or ""
+                        ).strip()
+                        if image_reference:
+                            return image_reference
 
-        if deleted_vault is not None:
-            vault_name = deleted_vault["name"]
-            purge_location = deleted_vault["location"] or location
-            print("\nTroubleshooting:")
-            print(
-                "This looks like a soft-delete collision — the deployment is "
-                f"trying to reuse Key Vault name {vault_name}, and Azure still "
-                "has that name reserved."
-            )
-            print("Recovery command I can run for you:")
-            print(
-                "  - "
-                + format_az_command(
-                    [
-                        "keyvault",
-                        "purge",
-                        "--name",
-                        vault_name,
-                        "--location",
-                        purge_location,
-                    ],
-                    host_os=host_os,
-                )
-            )
-            if self._confirm_yes_no(
-                "This looks like a soft-delete collision — would you like me "
-                "to purge it and continue? (y/n) "
-            ):
-                print(f"\nPurging deleted Key Vault {vault_name}...")
-                purge_result = purge_deleted_key_vault(
-                    vault_name,
-                    purge_location,
-                    host_os=host_os,
-                )
-                print(purge_result)
-                if "COMMAND FAILED" in purge_result:
-                    return ProvisioningRecoveryDecision(
-                        action="fail",
-                        message=purge_result,
-                    )
-                self.installer_state["name_suffix"] = ""
-                return ProvisioningRecoveryDecision(action="retry")
-
-        if diagnostics.get("name_conflict") and key_vault_name:
-            suggested_suffix = self._suggest_name_suffix()
-            print("\nTroubleshooting:")
-            print(
-                f"Azure is reporting a name collision for Key Vault {key_vault_name}."
-            )
-            print(
-                "If that name came from an old test environment, cleanup is a "
-                "good reset. If you want to keep moving now, I can retry with a "
-                f"short suffix like {suggested_suffix}."
-            )
-            if self._confirm_yes_no(
-                f"Retry this deployment with suffix {suggested_suffix}? (y/n) "
-            ):
-                self.installer_state["name_suffix"] = suggested_suffix
-                return ProvisioningRecoveryDecision(
-                    action="retry",
-                    name_suffix=suggested_suffix,
-                )
-
-        return ProvisioningRecoveryDecision(
-            action="fail",
-            message=self._format_provisioning_failure_message(
-                DEFAULT_DEPLOYMENT_NAME,
-                "Provisioning preflight",
-                diagnostics,
-            ),
+        combined_evidence = "\n".join(evidence_lines)
+        image_match = re.search(
+            r"([a-z0-9.-]+(?:/[a-z0-9._-]+)+:[A-Za-z0-9._-]+)",
+            combined_evidence,
+            flags=re.IGNORECASE,
         )
+        if image_match:
+            return image_match.group(1)
+
+        image_override = str(
+            self.installer_state.get("image_override") or ""
+        ).strip()
+        return image_override or DEFAULT_IMAGE_REFERENCE
+
+    def _summarize_container_app_diagnostics(
+        self, container_app_diagnostics: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        """Trim container app diagnostics down to the fields we need."""
+        if not isinstance(container_app_diagnostics, dict):
+            return None
+
+        app_payload = container_app_diagnostics.get("app")
+        app_properties = (
+            app_payload.get("properties", {})
+            if isinstance(app_payload, dict)
+            else {}
+        )
+        if not isinstance(app_properties, dict):
+            app_properties = {}
+        template = app_properties.get("template", {})
+        if not isinstance(template, dict):
+            template = {}
+        containers = template.get("containers", [])
+        image_reference = ""
+        if isinstance(containers, list):
+            for container in containers:
+                if not isinstance(container, dict):
+                    continue
+                image_reference = str(container.get("image") or "").strip()
+                if image_reference:
+                    break
+
+        logs = container_app_diagnostics.get("system_logs")
+        if isinstance(logs, str):
+            log_excerpt = [
+                line.strip() for line in logs.splitlines() if line.strip()
+            ][:5]
+        else:
+            log_excerpt = self._extract_error_messages(logs)[:5]
+
+        revisions = container_app_diagnostics.get("revisions", [])
+        revision_count = len(revisions) if isinstance(revisions, list) else 0
+
+        return {
+            "provisioning_state": app_properties.get("provisioningState"),
+            "image": image_reference,
+            "latest_revision": container_app_diagnostics.get("latest_revision"),
+            "revision_count": revision_count,
+            "system_logs": log_excerpt,
+        }
+
+    def _clear_last_failure_bundle(self) -> None:
+        """Clear troubleshooting state after a successful recovery."""
+        self.installer_state["last_failure_bundle"] = None
+        self.installer_state["troubleshooting_active"] = False
+
+    def _store_last_failure_bundle(self, bundle: dict[str, Any]) -> None:
+        """Persist the latest failure bundle for later review."""
+        self.installer_state["last_failure_bundle"] = bundle
+        self.installer_state["troubleshooting_active"] = True
+
+    def _collect_failure_bundle(
+        self,
+        resource_group: str,
+        deployment_name: str,
+        host_os: str,
+        initial_failure: str | None = None,
+    ) -> dict[str, Any]:
+        """Collect structured diagnostics for the current deployment failure."""
+        from tools.azure import (
+            collect_container_app_diagnostics,
+            collect_group_deployment_diagnostics,
+            list_deleted_key_vaults,
+        )
+        from tools.troubleshooting import build_troubleshooting_response
+
+        deployment_diagnostics = collect_group_deployment_diagnostics(
+            resource_group=resource_group,
+            deployment_name=deployment_name,
+            host_os=host_os,
+        )
+        failed_operations = self._flatten_failed_operations(
+            deployment_diagnostics
+        )
+        nested_error = self._first_nested_error(deployment_diagnostics)
+        top_level_error = deployment_diagnostics.get("error")
+
+        evidence_lines = self._extract_error_messages(initial_failure)
+        evidence_lines.extend(self._extract_error_messages(top_level_error))
+        if nested_error is not None:
+            evidence_lines.extend(
+                self._extract_error_messages(nested_error.get("error"))
+            )
+
+        for operation in failed_operations:
+            evidence_lines.append(self._summarize_failed_operation(operation))
+            for status_message in operation.get("status_messages", []):
+                evidence_lines.extend(
+                    self._extract_error_messages(status_message)
+                )
+
+        collection_errors = deployment_diagnostics.get("collection_errors", [])
+        if isinstance(collection_errors, list):
+            evidence_lines.extend(
+                str(item).strip() for item in collection_errors if str(item).strip()
+            )
+
+        evidence_lines = self._dedupe_lines(evidence_lines)
+        failed_resource = self._select_failed_resource(failed_operations)
+        combined_evidence = "\n".join(evidence_lines)
+
+        key_vault_name = (
+            failed_resource.get("name")
+            if str(failed_resource.get("type") or "").lower().startswith(
+                "microsoft.keyvault/"
+            )
+            else self._extract_key_vault_name(combined_evidence)
+        )
+        deleted_vault_match: dict[str, str] | None = None
+        if key_vault_name:
+            deleted_vaults_result = list_deleted_key_vaults(host_os=host_os)
+            if (
+                "COMMAND FAILED" not in deleted_vaults_result
+                and "COMMAND CANCELLED" not in deleted_vaults_result
+            ):
+                parsed_deleted_vaults = self._try_parse_json(
+                    deleted_vaults_result
+                )
+                deleted_vault_match = self._find_deleted_key_vault(
+                    parsed_deleted_vaults, key_vault_name
+                )
+
+        lowered_evidence = combined_evidence.lower()
+        should_check_container_app = (
+            str(failed_resource.get("type") or "").lower().startswith(
+                "microsoft.app/containerapps"
+            )
+            or "ghcr.io" in lowered_evidence
+            or "containerapp" in lowered_evidence
+            or "revision" in lowered_evidence
+        )
+        raw_container_app_diagnostics = (
+            collect_container_app_diagnostics(
+                resource_group=resource_group,
+                host_os=host_os,
+            )
+            if should_check_container_app
+            else None
+        )
+        container_app_summary = self._summarize_container_app_diagnostics(
+            raw_container_app_diagnostics
+        )
+        image_reference = self._extract_image_reference(
+            raw_container_app_diagnostics, evidence_lines
+        )
+
+        troubleshooting = build_troubleshooting_response(
+            {
+                "resource_group": resource_group,
+                "deployment_name": deployment_name,
+                "location": self.installer_state.get("location"),
+                "failed_resource_type": failed_resource.get("type"),
+                "failed_resource_name": failed_resource.get("name"),
+                "raw_error": combined_evidence,
+                "top_level_error": top_level_error,
+                "nested_error": nested_error.get("error")
+                if nested_error is not None
+                else None,
+                "evidence": evidence_lines,
+                "deleted_vault": deleted_vault_match,
+                "image_reference": image_reference,
+                "host_os": host_os,
+            }
+        )
+
+        bundle = {
+            "resource_group": resource_group,
+            "deployment_name": deployment_name,
+            "location": self.installer_state.get("location"),
+            "top_level_error": top_level_error,
+            "nested_error": nested_error.get("error")
+            if nested_error is not None
+            else None,
+            "nested_deployment_name": nested_error.get("deployment_name")
+            if nested_error is not None
+            else None,
+            "nested_deployments": deployment_diagnostics.get("nested", []),
+            "failed_operations": failed_operations[:8],
+            "failed_resource": failed_resource,
+            "failed_resource_type": failed_resource.get("type"),
+            "failed_resource_name": failed_resource.get("name"),
+            "issue_type": troubleshooting.get("issue_type"),
+            "diagnosis": troubleshooting.get("diagnosis"),
+            "evidence": evidence_lines[:8],
+            "suggested_actions": troubleshooting.get("guided_actions", []),
+            "manual_commands": troubleshooting.get("manual_commands", []),
+            "safe_to_auto_apply": troubleshooting.get(
+                "safe_to_auto_apply", []
+            ),
+            "deleted_vault": deleted_vault_match,
+            "image_reference": image_reference,
+            "container_app": container_app_summary,
+            "raw_error": combined_evidence,
+        }
+        self._store_last_failure_bundle(bundle)
+        return bundle
+
+    def _describe_guided_action(
+        self, action: str, bundle: dict[str, Any] | None = None
+    ) -> str:
+        """Render a guided fix action in operator-facing language."""
+        bundle = bundle or {}
+        if action == "purge_deleted_key_vault":
+            vault_name = str(
+                (bundle.get("deleted_vault") or {}).get("name") or ""
+            ).strip()
+            if vault_name:
+                return f"Purge the deleted Key Vault {vault_name} and retry."
+            return "Purge the deleted Key Vault and retry."
+        if action == "retry_with_name_suffix":
+            return "Retry with a short unique suffix so Azure gets fresh names."
+        if action == "retry_with_image_override":
+            return "Retry with an alternate image reference that Azure can pull."
+        if action == "cleanup_resource_group":
+            return "Clean up the SAO test resource group and start fresh."
+        return action.replace("_", " ")
+
+    def _review_last_failure(self, host_os: str) -> str:
+        """Return the cached failure bundle, or collect it if needed."""
+        bundle = self.installer_state.get("last_failure_bundle")
+        if isinstance(bundle, dict) and bundle:
+            return json.dumps(bundle, indent=2)
+
+        resource_group = str(self.installer_state.get("resource_group") or "").strip()
+        deployment_name = str(
+            self.installer_state.get("deployment_name") or DEFAULT_DEPLOYMENT_NAME
+        ).strip()
+        if not resource_group:
+            return json.dumps(
+                {
+                    "issue_type": "unknown",
+                    "diagnosis": "No bootstrap failure has been recorded yet.",
+                    "evidence": [],
+                    "guided_actions": [],
+                    "manual_commands": [],
+                    "safe_to_auto_apply": [],
+                },
+                indent=2,
+            )
+
+        bundle = self._collect_failure_bundle(
+            resource_group=resource_group,
+            deployment_name=deployment_name,
+            host_os=host_os,
+        )
+        return json.dumps(bundle, indent=2)
+
+    def _reset_after_cleanup(self) -> None:
+        """Clear state that only applies to an active deployment."""
+        self.installer_state["resource_group"] = None
+        self.installer_state["location"] = None
+        self.installer_state["deployment_name"] = None
+        self.installer_state["name_suffix"] = ""
+        self.installer_state["image_override"] = None
+        self.installer_state["sao_endpoint"] = None
+        self._clear_last_failure_bundle()
+
+    def _retry_current_provisioning(self, host_os: str) -> str:
+        """Retry provisioning with the current installer state."""
+        resource_group = str(self.installer_state.get("resource_group") or "").strip()
+        location = str(self.installer_state.get("location") or "").strip()
+        admin_oid = str(self.installer_state.get("admin_oid") or "").strip()
+        if not resource_group or not location or not admin_oid:
+            return (
+                "COMMAND FAILED: I do not have enough deployment context to "
+                "retry yet. I need the resource group, location, and admin OID."
+            )
+
+        retry_args = {
+            "resource_group": resource_group,
+            "location": location,
+            "admin_oid": admin_oid,
+        }
+        image_override = str(
+            self.installer_state.get("image_override") or ""
+        ).strip()
+        if image_override:
+            retry_args["image_reference"] = image_override
+        return self._run_provisioning_with_polling(retry_args, host_os)
+
+    def _apply_guided_fix(self, args: dict[str, Any], host_os: str) -> str:
+        """Apply a supported recovery action and retry when appropriate."""
+        from tools.azure import delete_resource_group, purge_deleted_key_vault
+
+        action = str(args.get("action") or "").strip()
+        bundle = self.installer_state.get("last_failure_bundle") or {}
+        if not action:
+            return "COMMAND FAILED: apply_guided_fix requires an action."
+
+        if action == "purge_deleted_key_vault":
+            deleted_vault = bundle.get("deleted_vault") or {}
+            vault_name = str(
+                deleted_vault.get("name")
+                or bundle.get("failed_resource_name")
+                or ""
+            ).strip()
+            location = str(
+                deleted_vault.get("location")
+                or self.installer_state.get("location")
+                or ""
+            ).strip()
+            if not vault_name or not location:
+                return (
+                    "COMMAND FAILED: I could not find a deleted Key Vault name "
+                    "and location to purge."
+                )
+            purge_result = purge_deleted_key_vault(
+                vault_name, location, host_os=host_os
+            )
+            if "COMMAND FAILED" in purge_result:
+                return purge_result
+            self.installer_state["name_suffix"] = ""
+            retry_result = self._retry_current_provisioning(host_os)
+            return f"{purge_result}\n\nRetry result:\n{retry_result}"
+
+        if action == "retry_with_name_suffix":
+            name_suffix = self._normalize_name_suffix(args.get("name_suffix"))
+            if not name_suffix:
+                name_suffix = self._suggest_name_suffix()
+            self.installer_state["name_suffix"] = name_suffix
+            retry_result = self._retry_current_provisioning(host_os)
+            return (
+                f"Retrying the deployment with unique suffix {name_suffix}.\n\n"
+                f"{retry_result}"
+            )
+
+        if action == "retry_with_image_override":
+            image_reference = str(args.get("image_reference") or "").strip()
+            if not image_reference:
+                image_reference = str(bundle.get("image_reference") or "").strip()
+            if not image_reference:
+                return (
+                    "COMMAND FAILED: retry_with_image_override requires an "
+                    "image_reference."
+                )
+            self.installer_state["image_override"] = image_reference
+            retry_result = self._retry_current_provisioning(host_os)
+            return (
+                "Retrying the deployment with image override "
+                f"{image_reference}.\n\n{retry_result}"
+            )
+
+        if action == "cleanup_resource_group":
+            resource_group = str(
+                args.get("resource_group")
+                or self.installer_state.get("resource_group")
+                or ""
+            ).strip()
+            if not resource_group:
+                return (
+                    "COMMAND FAILED: cleanup_resource_group requires a resource group."
+                )
+            cleanup_result = delete_resource_group(
+                resource_group, host_os=host_os
+            )
+            if "COMMAND FAILED" in cleanup_result:
+                return cleanup_result
+            self._reset_after_cleanup()
+            return cleanup_result
+
+        return f"COMMAND FAILED: Unsupported guided action {action}."
+
+    def _format_provisioning_failure_message(
+        self,
+        deployment_name: str,
+        context_label: str,
+        diagnostics: dict[str, Any],
+    ) -> str:
+        """Render a concise but actionable provisioning failure summary."""
+        lines = [
+            "COMMAND FAILED: "
+            f"{context_label} for Azure deployment {deployment_name} did not succeed."
+        ]
+
+        diagnosis = str(diagnostics.get("diagnosis") or "").strip()
+        if diagnosis:
+            lines.append(f"Likely issue: {diagnosis}")
+
+        failed_resource = diagnostics.get("failed_resource") or {}
+        resource_type = str(failed_resource.get("type") or "").strip()
+        resource_name = str(failed_resource.get("name") or "").strip()
+        if resource_type or resource_name:
+            resource_label = "/".join(
+                part for part in (resource_type, resource_name) if part
+            )
+            lines.append(f"Failing resource: {resource_label}")
+
+        nested_deployment_name = str(
+            diagnostics.get("nested_deployment_name") or ""
+        ).strip()
+        if nested_deployment_name:
+            lines.append(f"Nested deployment: {nested_deployment_name}")
+
+        evidence = diagnostics.get("evidence", [])
+        if evidence:
+            lines.append("Azure reported:")
+            for line in evidence[:3]:
+                lines.append(f"- {line}")
+
+        suggested_actions = diagnostics.get("suggested_actions", [])
+        if suggested_actions:
+            lines.append("Suggested recovery:")
+            for action in suggested_actions[:3]:
+                lines.append(
+                    f"- {self._describe_guided_action(action, diagnostics)}"
+                )
+
+        return "\n".join(lines)
 
     def _run_provisioning_with_polling(
         self, args: dict[str, Any], host_os: str
@@ -1387,204 +2104,195 @@ class InstallerAgent:
         location = args["location"]
         admin_oid = args["admin_oid"]
         deployment_name = DEFAULT_DEPLOYMENT_NAME
+        image_reference = str(
+            args.get("image_reference")
+            or self.installer_state.get("image_override")
+            or ""
+        ).strip()
 
         self.installer_state["deployment_name"] = deployment_name
         self.installer_state["resource_group"] = resource_group
         self.installer_state["location"] = location
         self.installer_state["admin_oid"] = admin_oid
+        if image_reference:
+            self.installer_state["image_override"] = image_reference
 
-        attempt_count = 0
-        while attempt_count < 3:
-            attempt_count += 1
-            name_suffix = self._normalize_name_suffix(
-                self.installer_state.get("name_suffix")
-            )
-
-            validation_result = validate_infrastructure_provisioning(
-                resource_group=resource_group,
-                location=location,
-                admin_oid=admin_oid,
-                host_os=host_os,
-                deployment_name=deployment_name,
-                name_suffix=name_suffix,
-            )
-            if (
-                "COMMAND FAILED" in validation_result
-                or "COMMAND CANCELLED" in validation_result
-            ):
-                diagnostics = self._analyze_provisioning_failure(
-                    resource_group=resource_group,
-                    deployment_name=deployment_name,
-                    host_os=host_os,
-                    initial_failure=validation_result,
-                )
-                recovery = self._offer_preflight_recovery(
-                    diagnostics=diagnostics,
-                    resource_group=resource_group,
-                    location=location,
-                    host_os=host_os,
-                )
-                if recovery.action == "retry":
-                    continue
-                return recovery.message or validation_result
-
-            start_result = start_infrastructure_provisioning(
-                resource_group=resource_group,
-                location=location,
-                admin_oid=admin_oid,
-                host_os=host_os,
-                deployment_name=deployment_name,
-                name_suffix=name_suffix,
-            )
-            if (
-                "COMMAND FAILED" in start_result
-                or "COMMAND CANCELLED" in start_result
-            ):
-                diagnostics = self._analyze_provisioning_failure(
-                    resource_group=resource_group,
-                    deployment_name=deployment_name,
-                    host_os=host_os,
-                    initial_failure=start_result,
-                )
-                recovery = self._offer_preflight_recovery(
-                    diagnostics=diagnostics,
-                    resource_group=resource_group,
-                    location=location,
-                    host_os=host_os,
-                )
-                if recovery.action == "retry":
-                    continue
-                return recovery.message or start_result
-
-            poll_started_at = time.monotonic()
-
-            while True:
-                status_result = get_group_deployment_status(
-                    resource_group=resource_group,
-                    deployment_name=deployment_name,
-                    host_os=host_os,
-                )
-                if "COMMAND FAILED" in status_result:
-                    return status_result
-
-                parsed_status = self._try_parse_json(status_result)
-                if not isinstance(parsed_status, dict):
-                    return (
-                        "COMMAND FAILED: Unable to parse deployment status for "
-                        f"{deployment_name}."
-                    )
-
-                state = str(parsed_status.get("state", "Unknown"))
-                elapsed = self._format_elapsed(time.monotonic() - poll_started_at)
-
-                if state == "Succeeded":
-                    endpoint_result = get_group_deployment_endpoint(
-                        resource_group=resource_group,
-                        deployment_name=deployment_name,
-                        host_os=host_os,
-                    )
-                    endpoint = endpoint_result.strip()
-                    if (
-                        not endpoint
-                        or "COMMAND FAILED" in endpoint_result
-                        or "COMMAND CANCELLED" in endpoint_result
-                    ):
-                        endpoint = "<endpoint unavailable>"
-                    self.installer_state["sao_endpoint"] = (
-                        endpoint
-                        if endpoint.startswith("http")
-                        else f"https://{endpoint}"
-                        if endpoint != "<endpoint unavailable>"
-                        else endpoint
-                    )
-
-                    health_result = check_deployment_status(
-                        resource_group, host_os=host_os
-                    )
-                    if (
-                        "COMMAND FAILED" not in health_result
-                        and "COMMAND CANCELLED" not in health_result
-                    ):
-                        self._update_state(
-                            "check_deployment_status",
-                            {"resource_group": resource_group},
-                            health_result,
-                        )
-                        if self.installer_state["sao_endpoint"]:
-                            endpoint = self.installer_state["sao_endpoint"]
-
-                    self._print_provisioning_handoff(
-                        endpoint=endpoint,
-                        admin_oid=admin_oid,
-                        health_result=health_result,
-                    )
-
-                    result = {
-                        "deployment_name": deployment_name,
-                        "provisioning_state": state,
-                        "elapsed": elapsed,
-                        "resource_group": resource_group,
-                        "endpoint": endpoint,
-                        "admin_oid": admin_oid,
-                        "health": health_result,
-                    }
-                    if name_suffix:
-                        result["name_suffix"] = name_suffix
-                    return json.dumps(result, indent=2)
-
-                if state in {"Failed", "Canceled"}:
-                    diagnostics = self._analyze_provisioning_failure(
-                        resource_group=resource_group,
-                        deployment_name=deployment_name,
-                        host_os=host_os,
-                        initial_failure=status_result,
-                    )
-                    return self._format_provisioning_failure_message(
-                        deployment_name=deployment_name,
-                        context_label=(
-                            "Azure deployment failure"
-                            f" ({state} at {parsed_status.get('timestamp', 'unknown time')})"
-                        ),
-                        diagnostics=diagnostics,
-                    )
-
-                stage_message = self._infer_provisioning_stage(
-                    resource_group, host_os
-                )
-                print(
-                    "\nDeployment is still running "
-                    f"({elapsed} elapsed). {stage_message}"
-                )
-
-                user_input = input(
-                    "\nDuring provisioning, press Enter to keep waiting, "
-                    "type 'status' to refresh now, or ask a question: "
-                )
-                normalized_input = user_input.strip()
-                if not normalized_input:
-                    time.sleep(POLL_INTERVAL_SECONDS)
-                    continue
-                if normalized_input.lower() == "status":
-                    continue
-
-                self._answer_polling_question(
-                    normalized_input,
-                    {
-                        "deployment_name": deployment_name,
-                        "resource_group": resource_group,
-                        "status": parsed_status,
-                        "elapsed": elapsed,
-                        "admin_oid": admin_oid,
-                        "name_suffix": name_suffix,
-                    },
-                )
-                time.sleep(POLL_INTERVAL_SECONDS)
-
-        return (
-            "COMMAND FAILED: Provisioning hit repeated name-collision recovery "
-            "attempts. Cleanup the test environment or retry with a fresh "
-            "resource group."
+        name_suffix = self._normalize_name_suffix(
+            self.installer_state.get("name_suffix")
         )
+
+        validation_result = validate_infrastructure_provisioning(
+            resource_group=resource_group,
+            location=location,
+            admin_oid=admin_oid,
+            host_os=host_os,
+            deployment_name=deployment_name,
+            name_suffix=name_suffix,
+            sao_image=image_reference,
+        )
+        if (
+            "COMMAND FAILED" in validation_result
+            or "COMMAND CANCELLED" in validation_result
+        ):
+            diagnostics = self._collect_failure_bundle(
+                resource_group=resource_group,
+                deployment_name=deployment_name,
+                host_os=host_os,
+                initial_failure=validation_result,
+            )
+            return self._format_provisioning_failure_message(
+                deployment_name=deployment_name,
+                context_label="Provisioning validation",
+                diagnostics=diagnostics,
+            )
+
+        start_result = start_infrastructure_provisioning(
+            resource_group=resource_group,
+            location=location,
+            admin_oid=admin_oid,
+            host_os=host_os,
+            deployment_name=deployment_name,
+            name_suffix=name_suffix,
+            sao_image=image_reference,
+        )
+        if "COMMAND FAILED" in start_result or "COMMAND CANCELLED" in start_result:
+            diagnostics = self._collect_failure_bundle(
+                resource_group=resource_group,
+                deployment_name=deployment_name,
+                host_os=host_os,
+                initial_failure=start_result,
+            )
+            return self._format_provisioning_failure_message(
+                deployment_name=deployment_name,
+                context_label="Provisioning start",
+                diagnostics=diagnostics,
+            )
+
+        poll_started_at = time.monotonic()
+
+        while True:
+            status_result = get_group_deployment_status(
+                resource_group=resource_group,
+                deployment_name=deployment_name,
+                host_os=host_os,
+            )
+            if "COMMAND FAILED" in status_result:
+                return status_result
+
+            parsed_status = self._try_parse_json(status_result)
+            if not isinstance(parsed_status, dict):
+                return (
+                    "COMMAND FAILED: Unable to parse deployment status for "
+                    f"{deployment_name}."
+                )
+
+            state = str(parsed_status.get("state", "Unknown"))
+            elapsed = self._format_elapsed(time.monotonic() - poll_started_at)
+
+            if state == "Succeeded":
+                endpoint_result = get_group_deployment_endpoint(
+                    resource_group=resource_group,
+                    deployment_name=deployment_name,
+                    host_os=host_os,
+                )
+                endpoint = endpoint_result.strip()
+                if (
+                    not endpoint
+                    or "COMMAND FAILED" in endpoint_result
+                    or "COMMAND CANCELLED" in endpoint_result
+                ):
+                    endpoint = "<endpoint unavailable>"
+                self.installer_state["sao_endpoint"] = (
+                    endpoint
+                    if endpoint.startswith("http")
+                    else f"https://{endpoint}"
+                    if endpoint != "<endpoint unavailable>"
+                    else endpoint
+                )
+
+                health_result = check_deployment_status(
+                    resource_group, host_os=host_os
+                )
+                if (
+                    "COMMAND FAILED" not in health_result
+                    and "COMMAND CANCELLED" not in health_result
+                ):
+                    self._update_state(
+                        "check_deployment_status",
+                        {"resource_group": resource_group},
+                        health_result,
+                    )
+                    if self.installer_state["sao_endpoint"]:
+                        endpoint = self.installer_state["sao_endpoint"]
+
+                self._clear_last_failure_bundle()
+                self._print_provisioning_handoff(
+                    endpoint=endpoint,
+                    admin_oid=admin_oid,
+                    health_result=health_result,
+                )
+
+                result = {
+                    "deployment_name": deployment_name,
+                    "provisioning_state": state,
+                    "elapsed": elapsed,
+                    "resource_group": resource_group,
+                    "endpoint": endpoint,
+                    "admin_oid": admin_oid,
+                    "health": health_result,
+                }
+                if name_suffix:
+                    result["name_suffix"] = name_suffix
+                if image_reference:
+                    result["image_reference"] = image_reference
+                return json.dumps(result, indent=2)
+
+            if state in {"Failed", "Canceled"}:
+                diagnostics = self._collect_failure_bundle(
+                    resource_group=resource_group,
+                    deployment_name=deployment_name,
+                    host_os=host_os,
+                    initial_failure=status_result,
+                )
+                return self._format_provisioning_failure_message(
+                    deployment_name=deployment_name,
+                    context_label=(
+                        "Azure deployment failure"
+                        f" ({state} at {parsed_status.get('timestamp', 'unknown time')})"
+                    ),
+                    diagnostics=diagnostics,
+                )
+
+            stage_message = self._infer_provisioning_stage(resource_group, host_os)
+            print(
+                "\nDeployment is still running "
+                f"({elapsed} elapsed). {stage_message}"
+            )
+
+            user_input = input(
+                "\nDuring provisioning, press Enter to keep waiting, "
+                "type 'status' to refresh now, or ask a question: "
+            )
+            normalized_input = user_input.strip()
+            if not normalized_input:
+                time.sleep(POLL_INTERVAL_SECONDS)
+                continue
+            if normalized_input.lower() == "status":
+                continue
+
+            self._answer_polling_question(
+                normalized_input,
+                {
+                    "deployment_name": deployment_name,
+                    "resource_group": resource_group,
+                    "status": parsed_status,
+                    "elapsed": elapsed,
+                    "admin_oid": admin_oid,
+                    "name_suffix": name_suffix,
+                    "image_reference": image_reference,
+                },
+            )
+            time.sleep(POLL_INTERVAL_SECONDS)
 
     def _execute_phase(self, tool_blocks: list[Any]) -> str:
         """Explain, approve, execute, and summarize a single phase."""
@@ -1598,6 +2306,9 @@ class InstallerAgent:
             self._get_tool_policy(block.name, dict(block.input))
             for block in selected_blocks
         ]
+        all_read_only = all(
+            policy.risk_class == "read" for policy in selected_policies
+        )
         batch_read_only = all(
             policy.risk_class == "read" and policy.batchable
             for policy in selected_policies
@@ -1621,6 +2332,11 @@ class InstallerAgent:
             print(
                 "This is a read-only batch. One approval will cover every "
                 "discovery and permission check listed above."
+            )
+        elif all_read_only:
+            print(
+                "This is a read-only review. I will still pause for approval "
+                "before I query Azure."
             )
         else:
             print(
@@ -1664,9 +2380,12 @@ class InstallerAgent:
         else:
             for block in selected_blocks:
                 policy = self._get_tool_policy(block.name, dict(block.input))
-                approved = self._confirm_yes_no(
-                    f"Approve {policy.preview_text}? (y/n) "
+                approval_prompt = (
+                    "Approve this read-only review? (y/n) "
+                    if policy.risk_class == "read"
+                    else f"Approve {policy.preview_text}? (y/n) "
                 )
+                approved = self._confirm_yes_no(approval_prompt)
                 if approved:
                     print(f"\nRunning {policy.preview_text}...")
                     if block.name == "provision_infrastructure":
@@ -1762,9 +2481,17 @@ class InstallerAgent:
                     args.get("name_suffix")
                     or self.installer_state.get("name_suffix")
                 ),
+                sao_image=(
+                    args.get("image_reference")
+                    or self.installer_state.get("image_override")
+                ),
             ),
             "check_deployment_status": lambda: check_deployment_status(
                 args["resource_group"], host_os=host_os
+            ),
+            "review_last_failure": lambda: self._review_last_failure(host_os),
+            "apply_guided_fix": lambda: self._apply_guided_fix(
+                args, host_os
             ),
             "run_az_command": lambda: run_az_command(
                 args["args"], host_os=host_os
@@ -1806,11 +2533,10 @@ class InstallerAgent:
             self.installer_state["location"] = args.get("location")
 
         elif tool_name == "delete_resource_group":
-            self.installer_state["resource_group"] = None
-            self.installer_state["location"] = None
-            self.installer_state["deployment_name"] = None
-            self.installer_state["name_suffix"] = ""
-            self.installer_state["sao_endpoint"] = None
+            self._reset_after_cleanup()
+
+        elif tool_name == "review_last_failure" and parsed:
+            self._store_last_failure_bundle(parsed)
 
         elif tool_name == "check_deployment_status":
             for line in result.splitlines():

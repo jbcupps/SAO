@@ -12,6 +12,10 @@ master_verifying.key
 target/
 *.pdb
 
+# Python
+__pycache__/
+*.pyc
+
 # Node / Frontend
 node_modules/
 frontend/dist/

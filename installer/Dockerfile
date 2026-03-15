@@ -11,6 +11,7 @@ RUN python -m pip install --no-cache-dir -r /app/requirements.txt
 # Application
 COPY src/ /app/src/
 COPY bicep/ /app/bicep/
+COPY shared/ /app/shared/
 COPY system_prompt.md /app/system_prompt.md
 
 WORKDIR /app

@@ -26,6 +26,7 @@ from agent import (
     InstallerAgent,
     POLL_INTERVAL_SECONDS,
     REQUIRED_CHECKIN,
+    REVIEW_CHECKINS,
 )
 
 
@@ -356,23 +357,27 @@ class InstallerAgentTests(unittest.TestCase):
         ), patch(
             "tools.azure.get_group_deployment_status",
             return_value='{"state":"Failed","timestamp":"2026-03-15T12:05:00Z"}',
-        ), patch(
-            "tools.azure.get_group_deployment_error",
-            return_value=(
-                '{"code":"Conflict","message":"Vault name '
-                '\'sao-abc-kv\' is already in use."}'
-            ),
-        ), patch(
-            "tools.azure.list_group_deployment_operations",
-            return_value=(
-                '[{"properties":{"provisioningState":"Failed",'
-                '"targetResource":{"resourceType":"Microsoft.KeyVault/vaults",'
-                '"resourceName":"sao-abc-kv"},'
-                '"statusMessage":{"message":"Vault name is already in use."}}}]'
-            ),
-        ), patch(
-            "tools.azure.list_deleted_key_vaults",
-            return_value="[]",
+        ), patch.object(
+            agent,
+            "_collect_failure_bundle",
+            return_value={
+                "issue_type": "keyvault_name_conflict",
+                "diagnosis": (
+                    "The deployment hit a Key Vault global name conflict. "
+                    "Azure will not allow two vaults anywhere to share the same DNS name."
+                ),
+                "failed_resource": {
+                    "type": "Microsoft.KeyVault/vaults",
+                    "name": "sao-abc-kv",
+                },
+                "evidence": [
+                    "Conflict: Vault name 'sao-abc-kv' is already in use."
+                ],
+                "suggested_actions": [
+                    "retry_with_name_suffix",
+                    "cleanup_resource_group",
+                ],
+            },
         ), patch("sys.stdout", new=io.StringIO()):
             result = agent._run_provisioning_with_polling(
                 {
@@ -384,149 +389,133 @@ class InstallerAgentTests(unittest.TestCase):
             )
 
         self.assertIn("COMMAND FAILED", result)
-        self.assertIn("Azure reported:", result)
-        self.assertIn("Failing operations:", result)
+        self.assertIn("Likely issue:", result)
+        self.assertIn("Failing resource:", result)
         self.assertIn("Suggested recovery:", result)
 
-    def test_provisioning_validation_soft_delete_collision_can_purge_and_continue(self):
+    def test_review_last_failure_returns_cached_bundle(self):
         agent = self._make_agent([])
-        prompts: list[str] = []
-        stdout = io.StringIO()
-        validation_results = iter(
-            [
-                (
-                    "COMMAND FAILED (exit 1):\nConflict: Vault name "
-                    "'sao-abc-kv' is deleted but recoverable."
-                ),
-                '{"status":"Valid"}',
-            ]
-        )
+        agent.installer_state["last_failure_bundle"] = {
+            "issue_type": "container_image_denied",
+            "diagnosis": "Azure could not pull the configured image.",
+            "failed_resource": {
+                "type": "Microsoft.App/containerApps",
+                "name": "sao-app",
+            },
+        }
+        agent.installer_state["troubleshooting_active"] = True
 
-        def fake_input(prompt: str) -> str:
-            prompts.append(prompt)
-            return "y"
+        result = agent._review_last_failure(host_os="windows")
+
+        self.assertIn('"issue_type": "container_image_denied"', result)
+        self.assertIn('"name": "sao-app"', result)
+
+    def test_apply_guided_fix_purges_deleted_key_vault_and_retries(self):
+        agent = self._make_agent([])
+        agent.installer_state["resource_group"] = "sao-rg"
+        agent.installer_state["location"] = "eastus2"
+        agent.installer_state["admin_oid"] = "oid-123"
+        agent.installer_state["last_failure_bundle"] = {
+            "deleted_vault": {"name": "sao-abc-kv", "location": "eastus2"},
+            "failed_resource_name": "sao-abc-kv",
+        }
 
         with patch(
-            "tools.azure.validate_infrastructure_provisioning",
-            side_effect=lambda **kwargs: next(validation_results),
-        ), patch(
-            "tools.azure.get_group_deployment_error",
-            return_value=(
-                '{"code":"Conflict","message":"Vault name '
-                '\'sao-abc-kv\' is deleted but recoverable."}'
-            ),
-        ), patch(
-            "tools.azure.list_group_deployment_operations",
-            return_value="[]",
-        ), patch(
-            "tools.azure.list_deleted_key_vaults",
-            return_value='[{"name":"sao-abc-kv","location":"eastus2"}]',
-        ), patch(
             "tools.azure.purge_deleted_key_vault",
-            return_value=(
-                "Purge requested for deleted Key Vault sao-abc-kv in eastus2. "
-                "Azure is clearing the soft-deleted name so the deployment can "
-                "reuse it."
-            ),
-        ) as purge_mock, patch(
-            "tools.azure.start_infrastructure_provisioning",
-            return_value="",
-        ) as start_mock, patch(
-            "tools.azure.get_group_deployment_status",
-            return_value='{"state":"Succeeded","timestamp":"2026-03-15T12:01:00Z"}',
-        ), patch(
-            "tools.azure.get_group_deployment_endpoint",
-            return_value="sao.example.com",
-        ), patch(
-            "tools.azure.check_deployment_status",
-            return_value='Endpoint: https://sao.example.com\nHealth: {"status":"ok"}',
-        ), patch(
-            "builtins.input", side_effect=fake_input
-        ), patch("sys.stdout", new=stdout):
-            result = agent._run_provisioning_with_polling(
-                {
-                    "resource_group": "sao-rg",
-                    "location": "eastus2",
-                    "admin_oid": "oid-123",
-                },
+            return_value="Purge requested for deleted Key Vault sao-abc-kv in eastus2.",
+        ) as purge_mock, patch.object(
+            agent,
+            "_run_provisioning_with_polling",
+            return_value='{"provisioning_state":"Succeeded"}',
+        ) as retry_mock:
+            result = agent._apply_guided_fix(
+                {"action": "purge_deleted_key_vault"},
                 host_os="windows",
             )
 
-        self.assertIn('"provisioning_state": "Succeeded"', result)
         purge_mock.assert_called_once_with(
             "sao-abc-kv", "eastus2", host_os="windows"
         )
-        start_mock.assert_called_once()
-        self.assertEqual(
-            prompts,
-            [
-                "This looks like a soft-delete collision — would you like me to purge it and continue? (y/n) ",
-            ],
-        )
-        self.assertIn("soft-delete collision", stdout.getvalue())
+        retry_mock.assert_called_once()
+        self.assertIn("Retry result:", result)
+        self.assertIn('"provisioning_state":"Succeeded"', result)
 
-    def test_provisioning_validation_name_conflict_can_retry_with_suffix(self):
+    def test_apply_guided_fix_retry_with_name_suffix_sets_suffix(self):
         agent = self._make_agent([])
-        stdout = io.StringIO()
-        validation_results = iter(
-            [
-                (
-                    "COMMAND FAILED (exit 1):\nConflict: Vault name "
-                    "'sao-abc-kv' is already in use."
-                ),
-                '{"status":"Valid"}',
-            ]
-        )
+        agent.installer_state["resource_group"] = "sao-rg"
+        agent.installer_state["location"] = "eastus2"
+        agent.installer_state["admin_oid"] = "oid-123"
 
         with patch.object(
-            agent, "_suggest_name_suffix", return_value="a7c"
-        ), patch(
-            "tools.azure.validate_infrastructure_provisioning",
-            side_effect=lambda **kwargs: next(validation_results),
-        ), patch(
-            "tools.azure.get_group_deployment_error",
-            return_value=(
-                '{"code":"Conflict","message":"Vault name '
-                '\'sao-abc-kv\' is already in use."}'
-            ),
-        ), patch(
-            "tools.azure.list_group_deployment_operations",
-            return_value="[]",
-        ), patch(
-            "tools.azure.list_deleted_key_vaults",
-            return_value="[]",
-        ), patch(
-            "tools.azure.start_infrastructure_provisioning",
-            return_value="",
-        ) as start_mock, patch(
-            "tools.azure.get_group_deployment_status",
-            return_value='{"state":"Succeeded","timestamp":"2026-03-15T12:01:00Z"}',
-        ), patch(
-            "tools.azure.get_group_deployment_endpoint",
-            return_value="sao.example.com",
-        ), patch(
-            "tools.azure.check_deployment_status",
-            return_value='Endpoint: https://sao.example.com\nHealth: {"status":"ok"}',
-        ), patch(
-            "builtins.input",
-            side_effect=lambda prompt: "y",
-        ), patch("sys.stdout", new=stdout):
-            result = agent._run_provisioning_with_polling(
+            agent,
+            "_run_provisioning_with_polling",
+            return_value='{"provisioning_state":"Succeeded","name_suffix":"a7c"}',
+        ) as retry_mock:
+            result = agent._apply_guided_fix(
+                {"action": "retry_with_name_suffix", "name_suffix": "a7c"},
+                host_os="windows",
+            )
+
+        self.assertEqual(agent.installer_state["name_suffix"], "a7c")
+        retry_mock.assert_called_once()
+        self.assertIn("unique suffix a7c", result)
+
+    def test_apply_guided_fix_retry_with_image_override_sets_override(self):
+        agent = self._make_agent([])
+        agent.installer_state["resource_group"] = "sao-rg"
+        agent.installer_state["location"] = "eastus2"
+        agent.installer_state["admin_oid"] = "oid-123"
+
+        with patch.object(
+            agent,
+            "_run_provisioning_with_polling",
+            return_value='{"provisioning_state":"Succeeded","image_reference":"ghcr.io/example/sao:v2"}',
+        ) as retry_mock:
+            result = agent._apply_guided_fix(
                 {
-                    "resource_group": "sao-rg",
-                    "location": "eastus2",
-                    "admin_oid": "oid-123",
+                    "action": "retry_with_image_override",
+                    "image_reference": "ghcr.io/example/sao:v2",
                 },
                 host_os="windows",
             )
 
-        self.assertIn('"provisioning_state": "Succeeded"', result)
-        self.assertIn('"name_suffix": "a7c"', result)
         self.assertEqual(
-            start_mock.call_args.kwargs["name_suffix"],
-            "a7c",
+            agent.installer_state["image_override"],
+            "ghcr.io/example/sao:v2",
         )
-        self.assertIn("retry with a short suffix like a7c", stdout.getvalue())
+        retry_mock.assert_called_once()
+        self.assertIn("image override ghcr.io/example/sao:v2", result)
+
+    def test_summary_response_accepts_varied_checkins(self):
+        agent = self._make_agent([])
+
+        for checkin in REVIEW_CHECKINS:
+            self.assertTrue(
+                agent._summary_response_is_valid(
+                    [FakeBlock("text", text=f"Summary. {checkin}")]
+                )
+            )
+
+    def test_runtime_system_prompt_includes_troubleshooting_context(self):
+        agent = self._make_agent([])
+        agent.installer_state["troubleshooting_active"] = True
+        agent.installer_state["last_failure_bundle"] = {
+            "issue_type": "container_image_denied",
+            "diagnosis": "Azure could not pull the image.",
+            "failed_resource": {
+                "type": "Microsoft.App/containerApps",
+                "name": "sao-app",
+            },
+            "suggested_actions": ["retry_with_image_override"],
+            "evidence": ["DENIED: requested access to the resource is denied"],
+        }
+
+        prompt = agent._build_runtime_system_prompt()
+
+        self.assertIn("Troubleshooting mode is active", prompt)
+        self.assertIn("review_last_failure", prompt)
+        self.assertIn("apply_guided_fix", prompt)
+        self.assertIn("container_image_denied", prompt)
 
     def test_declined_write_step_does_not_execute_tool(self):
         responses = [
@@ -691,7 +680,7 @@ class InstallerAgentTests(unittest.TestCase):
             prompts,
             [
                 "Approve cleanup of resource group sao-rg? (y/n) ",
-                f"\n{REQUIRED_CHECKIN}\nYou: ",
+                f"\n{agent._checkin_for_phase('cleanup')}\nYou: ",
                 "Would you like fresh-install instructions now? (y/n) ",
             ],
         )

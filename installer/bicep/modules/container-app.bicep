@@ -1,7 +1,7 @@
 param location string
 param appName string
 param envName string
-param saoImageTag string
+param saoImage string
 param databaseUrl string
 param keyVaultUri string
 param adminOid string
@@ -43,7 +43,7 @@ resource saoApp 'Microsoft.App/containerApps@2024-03-01' = {
       containers: [
         {
           name: 'sao'
-          image: 'ghcr.io/jbcupps/sao:${saoImageTag}'
+          image: saoImage
           resources: { cpu: json('0.5'), memory: '1Gi' }
           env: [
             { name: 'DATABASE_URL', value: databaseUrl }

@@ -1,0 +1,209 @@
+{
+  "version": 1,
+  "issues": [
+    {
+      "issue_type": "keyvault_soft_delete",
+      "match": {
+        "resource_type_contains": [
+          "microsoft.keyvault/vaults"
+        ],
+        "any_of": [
+          "deleted state",
+          "deleted but recoverable",
+          "soft-delete",
+          "soft delete",
+          "recoverable deleted",
+          "scheduled for deletion"
+        ]
+      },
+      "diagnosis": "Azure is still holding the Key Vault name in soft-delete, so the bootstrap deployment cannot reuse that global name yet.",
+      "guided_actions": [
+        "purge_deleted_key_vault",
+        "retry_with_name_suffix",
+        "cleanup_resource_group"
+      ],
+      "manual_commands": [
+        "az deployment group show -g [[resource_group]] -n [[deployment_name]] --query properties.error --output json",
+        "az deployment operation group list -g [[resource_group]] -n keyvault --output json",
+        "az keyvault list-deleted --resource-type vault --output table",
+        "az keyvault purge --name [[failed_resource_name]] --location [[location]]"
+      ],
+      "safe_to_auto_apply": [
+        "purge_deleted_key_vault",
+        "retry_with_name_suffix"
+      ]
+    },
+    {
+      "issue_type": "keyvault_name_conflict",
+      "match": {
+        "resource_type_contains": [
+          "microsoft.keyvault/vaults"
+        ],
+        "any_of": [
+          "already exists",
+          "already in use",
+          "name is not available",
+          "globally unique",
+          "conflict"
+        ],
+        "not_any_of": [
+          "deleted state",
+          "deleted but recoverable",
+          "soft-delete",
+          "soft delete",
+          "recoverable deleted"
+        ]
+      },
+      "diagnosis": "The deployment hit a Key Vault global name conflict. Azure will not allow two vaults anywhere to share the same DNS name.",
+      "guided_actions": [
+        "retry_with_name_suffix",
+        "cleanup_resource_group"
+      ],
+      "manual_commands": [
+        "az deployment group show -g [[resource_group]] -n [[deployment_name]] --query properties.error --output json",
+        "az deployment operation group list -g [[resource_group]] -n keyvault --output json"
+      ],
+      "safe_to_auto_apply": [
+        "retry_with_name_suffix"
+      ]
+    },
+    {
+      "issue_type": "container_image_denied",
+      "match": {
+        "resource_type_contains": [
+          "microsoft.app/containerapps"
+        ],
+        "any_of": [
+          "denied: requested access to the resource is denied",
+          "pull access denied",
+          "unauthorized",
+          "authentication required"
+        ]
+      },
+      "diagnosis": "The Container App reached the registry, but Azure could not pull the configured image because the registry denied access.",
+      "guided_actions": [
+        "retry_with_image_override",
+        "cleanup_resource_group"
+      ],
+      "manual_commands": [
+        "az deployment group show -g [[resource_group]] -n container-app --query properties.error --output json",
+        "az deployment operation group list -g [[resource_group]] -n container-app --output json",
+        "az containerapp show -g [[resource_group]] -n sao-app --output json",
+        "az containerapp registry set -n sao-app -g [[resource_group]] --server ghcr.io --username <github-username> --password <github-personal-access-token>",
+        "az containerapp update -n sao-app -g [[resource_group]] --image [[image_reference]]"
+      ],
+      "safe_to_auto_apply": [
+        "retry_with_image_override"
+      ]
+    },
+    {
+      "issue_type": "container_image_not_found",
+      "match": {
+        "resource_type_contains": [
+          "microsoft.app/containerapps"
+        ],
+        "any_of": [
+          "manifest unknown",
+          "not found",
+          "repository does not exist",
+          "tag does not exist"
+        ]
+      },
+      "diagnosis": "The Container App image reference does not resolve to a pullable image in the registry.",
+      "guided_actions": [
+        "retry_with_image_override",
+        "cleanup_resource_group"
+      ],
+      "manual_commands": [
+        "az deployment group show -g [[resource_group]] -n container-app --query properties.error --output json",
+        "az deployment operation group list -g [[resource_group]] -n container-app --output json",
+        "az containerapp update -n sao-app -g [[resource_group]] --image [[image_reference]]"
+      ],
+      "safe_to_auto_apply": [
+        "retry_with_image_override"
+      ]
+    },
+    {
+      "issue_type": "containerapp_revision_failed",
+      "match": {
+        "resource_type_contains": [
+          "microsoft.app/containerapps"
+        ],
+        "any_of": [
+          "revision failed",
+          "containerappoperationerror",
+          "replica",
+          "readiness probe",
+          "startup probe"
+        ]
+      },
+      "diagnosis": "The Container App resource exists, but its revision failed to become healthy.",
+      "guided_actions": [
+        "retry_with_image_override",
+        "cleanup_resource_group"
+      ],
+      "manual_commands": [
+        "az containerapp show -g [[resource_group]] -n sao-app --output json",
+        "az containerapp revision list -g [[resource_group]] -n sao-app --all --output json",
+        "az containerapp logs show -g [[resource_group]] -n sao-app --type system --tail 50 --output json"
+      ],
+      "safe_to_auto_apply": []
+    },
+    {
+      "issue_type": "provider_not_registered",
+      "match": {
+        "any_of": [
+          "is not registered",
+          "register the provider",
+          "subscription is not registered",
+          "missing subscription registration"
+        ]
+      },
+      "diagnosis": "The target subscription is missing a required Azure resource provider registration.",
+      "guided_actions": [],
+      "manual_commands": [
+        "az provider show --namespace Microsoft.App --query registrationState -o tsv",
+        "az provider show --namespace Microsoft.DBforPostgreSQL --query registrationState -o tsv",
+        "az provider show --namespace Microsoft.KeyVault --query registrationState -o tsv",
+        "az provider register --namespace <missing-provider-namespace>"
+      ],
+      "safe_to_auto_apply": []
+    },
+    {
+      "issue_type": "quota_or_capacity",
+      "match": {
+        "any_of": [
+          "quota",
+          "capacity",
+          "insufficient",
+          "sku is not available",
+          "sku not available",
+          "regional capacity",
+          "currently unavailable"
+        ]
+      },
+      "diagnosis": "Azure rejected the deployment because the selected region or SKU does not currently have capacity or quota available.",
+      "guided_actions": [
+        "cleanup_resource_group"
+      ],
+      "manual_commands": [
+        "az deployment group show -g [[resource_group]] -n [[deployment_name]] --query properties.error --output json",
+        "az deployment operation group list -g [[resource_group]] -n [[deployment_name]] --output json"
+      ],
+      "safe_to_auto_apply": []
+    },
+    {
+      "issue_type": "unknown",
+      "match": {},
+      "diagnosis": "The deployment failed, but the evidence does not yet match a known bootstrap issue signature.",
+      "guided_actions": [
+        "cleanup_resource_group"
+      ],
+      "manual_commands": [
+        "az deployment group show -g [[resource_group]] -n [[deployment_name]] --query properties.error --output json",
+        "az deployment operation group list -g [[resource_group]] -n [[deployment_name]] --output json"
+      ],
+      "safe_to_auto_apply": []
+    }
+  ]
+}

@@ -5,10 +5,13 @@ import os
 import re
 import shlex
 import subprocess
+from typing import Any
 
 HOST_OS = os.environ.get("HOST_OS", "windows" if os.name == "nt" else "linux")
 AZURE_CLI_PATHS = ("/usr/bin/az", "/usr/local/bin/az")
 DEFAULT_DEPLOYMENT_NAME = "sao-bootstrap"
+DEFAULT_CONTAINER_APP_NAME = "sao-app"
+DEFAULT_IMAGE_TAG = "latest"
 _CONTROL_CHARACTERS = re.compile(r"[\r\n\x00]")
 _READ_ONLY_PREFIXES_2 = {
     ("account", "show"),
@@ -22,6 +25,8 @@ _READ_ONLY_PREFIXES_2 = {
 }
 _READ_ONLY_PREFIXES_3 = {
     ("ad", "signed-in-user", "show"),
+    ("containerapp", "logs", "show"),
+    ("containerapp", "revision", "list"),
     ("deployment", "group", "show"),
     ("role", "assignment", "list"),
 }
@@ -150,7 +155,7 @@ def _run(
     parse_json: bool = True,
     host_os: str | None = None,
 ) -> str:
-    """Run an az CLI command, return output as string."""
+    """Run an az CLI command and return its output as text."""
     _validate_args(args)
     normalized_host_os = _normalize_host_os(host_os)
     if _is_device_code_login(args):
@@ -209,6 +214,21 @@ def _run(
     return output
 
 
+def _parse_json_output(result: str) -> dict[str, Any] | list[Any] | None:
+    """Parse JSON output when the command succeeded."""
+    if (
+        not result
+        or "COMMAND FAILED" in result
+        or "COMMAND CANCELLED" in result
+        or result.strip() == "null"
+    ):
+        return None
+    try:
+        return json.loads(result)
+    except json.JSONDecodeError:
+        return None
+
+
 def _rest_uses_get(args: list[str]) -> bool:
     """Return True when az rest is explicitly or implicitly a GET."""
     normalized = [arg.lower() for arg in args]
@@ -245,6 +265,7 @@ def _deployment_group_args(
     admin_oid: str,
     deployment_name: str,
     name_suffix: str | None = None,
+    sao_image: str | None = None,
 ) -> list[str]:
     """Build consistent deployment or validation argv tokens."""
     args = [
@@ -260,12 +281,78 @@ def _deployment_group_args(
         "--parameters",
         f"location={location}",
         f"adminOid={admin_oid}",
-        "saoImageTag=latest",
     ]
+    normalized_image = (sao_image or "").strip()
+    if normalized_image:
+        args.append(f"saoImage={normalized_image}")
+    else:
+        args.append(f"saoImageTag={DEFAULT_IMAGE_TAG}")
     normalized_suffix = (name_suffix or "").strip().lower()
     if normalized_suffix:
         args.append(f"nameSuffix={normalized_suffix}")
     return args
+
+
+def _normalize_failed_operation(operation: dict[str, Any]) -> dict[str, Any] | None:
+    """Extract the fields we care about from a deployment operation record."""
+    properties = operation.get("properties", {})
+    if not isinstance(properties, dict):
+        return None
+
+    state = str(
+        properties.get("provisioningState")
+        or operation.get("provisioningState")
+        or ""
+    ).strip()
+    target_resource = properties.get("targetResource", {})
+    if not isinstance(target_resource, dict):
+        target_resource = {}
+
+    resource_type = str(
+        target_resource.get("resourceType") or target_resource.get("type") or ""
+    ).strip()
+    resource_name = str(
+        target_resource.get("resourceName") or target_resource.get("name") or ""
+    ).strip()
+
+    status_message = properties.get("statusMessage")
+    status_messages: list[str] = []
+    if isinstance(status_message, dict):
+        text = json.dumps(status_message, sort_keys=True)
+        status_messages.append(text)
+    elif isinstance(status_message, list):
+        status_messages.extend(str(item).strip() for item in status_message if str(item).strip())
+    elif status_message is not None:
+        normalized = str(status_message).strip()
+        if normalized:
+            status_messages.append(normalized)
+
+    if state not in {"Failed", "Canceled"} and not status_messages:
+        return None
+
+    return {
+        "provisioning_state": state,
+        "resource_type": resource_type,
+        "resource_name": resource_name,
+        "status_messages": status_messages[:3],
+    }
+
+
+def _failed_operations_from_payload(
+    operations_payload: list[Any] | None,
+) -> list[dict[str, Any]]:
+    """Normalize the failed operations from an operation-list payload."""
+    if not isinstance(operations_payload, list):
+        return []
+
+    failed_operations: list[dict[str, Any]] = []
+    for operation in operations_payload:
+        if not isinstance(operation, dict):
+            continue
+        normalized = _normalize_failed_operation(operation)
+        if normalized is not None:
+            failed_operations.append(normalized)
+    return failed_operations
 
 
 def az_login(host_os: str | None = None) -> str:
@@ -351,6 +438,7 @@ def provision_infrastructure(
     host_os: str | None = None,
     deployment_name: str = DEFAULT_DEPLOYMENT_NAME,
     name_suffix: str | None = None,
+    sao_image: str | None = None,
 ) -> str:
     """Deploy the SAO Bicep template."""
     return start_infrastructure_provisioning(
@@ -360,6 +448,7 @@ def provision_infrastructure(
         host_os=host_os,
         deployment_name=deployment_name,
         name_suffix=name_suffix,
+        sao_image=sao_image,
     )
 
 
@@ -370,6 +459,7 @@ def start_infrastructure_provisioning(
     host_os: str | None = None,
     deployment_name: str = DEFAULT_DEPLOYMENT_NAME,
     name_suffix: str | None = None,
+    sao_image: str | None = None,
 ) -> str:
     """Start the SAO Bicep deployment without waiting for completion."""
     return _run(
@@ -381,6 +471,7 @@ def start_infrastructure_provisioning(
                 admin_oid=admin_oid,
                 deployment_name=deployment_name,
                 name_suffix=name_suffix,
+                sao_image=sao_image,
             ),
             "--no-wait",
             "--output",
@@ -398,6 +489,7 @@ def validate_infrastructure_provisioning(
     host_os: str | None = None,
     deployment_name: str = DEFAULT_DEPLOYMENT_NAME,
     name_suffix: str | None = None,
+    sao_image: str | None = None,
 ) -> str:
     """Validate the SAO Bicep deployment before the write starts."""
     return _run(
@@ -409,7 +501,30 @@ def validate_infrastructure_provisioning(
                 admin_oid=admin_oid,
                 deployment_name=deployment_name,
                 name_suffix=name_suffix,
+                sao_image=sao_image,
             ),
+            "--output",
+            "json",
+        ],
+        host_os=host_os,
+    )
+
+
+def get_group_deployment(
+    resource_group: str,
+    deployment_name: str = DEFAULT_DEPLOYMENT_NAME,
+    host_os: str | None = None,
+) -> str:
+    """Return the full ARM deployment payload."""
+    return _run(
+        [
+            "deployment",
+            "group",
+            "show",
+            "--resource-group",
+            resource_group,
+            "--name",
+            deployment_name,
             "--output",
             "json",
         ],
@@ -532,6 +647,213 @@ def list_group_deployment_operations(
     )
 
 
+def get_container_app(
+    resource_group: str,
+    app_name: str = DEFAULT_CONTAINER_APP_NAME,
+    host_os: str | None = None,
+) -> str:
+    """Return the full Container App payload."""
+    return _run(
+        [
+            "containerapp",
+            "show",
+            "--resource-group",
+            resource_group,
+            "--name",
+            app_name,
+            "--output",
+            "json",
+        ],
+        host_os=host_os,
+    )
+
+
+def list_container_app_revisions(
+    resource_group: str,
+    app_name: str = DEFAULT_CONTAINER_APP_NAME,
+    host_os: str | None = None,
+) -> str:
+    """List Container App revisions for troubleshooting."""
+    return _run(
+        [
+            "containerapp",
+            "revision",
+            "list",
+            "--resource-group",
+            resource_group,
+            "--name",
+            app_name,
+            "--all",
+            "--output",
+            "json",
+        ],
+        host_os=host_os,
+    )
+
+
+def get_container_app_system_logs(
+    resource_group: str,
+    app_name: str = DEFAULT_CONTAINER_APP_NAME,
+    tail: int = 50,
+    revision: str | None = None,
+    host_os: str | None = None,
+) -> str:
+    """Read recent system logs for the Container App."""
+    args = [
+        "containerapp",
+        "logs",
+        "show",
+        "--resource-group",
+        resource_group,
+        "--name",
+        app_name,
+        "--type",
+        "system",
+        "--tail",
+        str(tail),
+        "--output",
+        "json",
+    ]
+    normalized_revision = (revision or "").strip()
+    if normalized_revision:
+        args.extend(["--revision", normalized_revision])
+    return _run(args, host_os=host_os)
+
+
+def collect_group_deployment_diagnostics(
+    resource_group: str,
+    deployment_name: str = DEFAULT_DEPLOYMENT_NAME,
+    host_os: str | None = None,
+    _visited: set[str] | None = None,
+) -> dict[str, Any]:
+    """Recursively collect failure diagnostics for a deployment and its children."""
+    visited = set(_visited or set())
+    if deployment_name in visited:
+        return {
+            "deployment_name": deployment_name,
+            "provisioning_state": None,
+            "timestamp": None,
+            "error": None,
+            "failed_operations": [],
+            "nested": [],
+            "collection_errors": [
+                f"Skipped recursive loop while collecting {deployment_name}."
+            ],
+        }
+    visited.add(deployment_name)
+
+    show_result = get_group_deployment(
+        resource_group=resource_group,
+        deployment_name=deployment_name,
+        host_os=host_os,
+    )
+    show_payload = _parse_json_output(show_result)
+    error_result = get_group_deployment_error(
+        resource_group=resource_group,
+        deployment_name=deployment_name,
+        host_os=host_os,
+    )
+    error_payload = _parse_json_output(error_result)
+    operations_result = list_group_deployment_operations(
+        resource_group=resource_group,
+        deployment_name=deployment_name,
+        host_os=host_os,
+    )
+    operations_payload = _parse_json_output(operations_result)
+    failed_operations = _failed_operations_from_payload(operations_payload)
+
+    properties = show_payload.get("properties", {}) if isinstance(show_payload, dict) else {}
+    child_deployments: list[str] = []
+    for operation in failed_operations:
+        if (
+            str(operation.get("resource_type") or "").lower()
+            == "microsoft.resources/deployments"
+        ):
+            child_name = str(operation.get("resource_name") or "").strip()
+            if child_name and child_name not in child_deployments:
+                child_deployments.append(child_name)
+
+    nested = [
+        collect_group_deployment_diagnostics(
+            resource_group=resource_group,
+            deployment_name=child_name,
+            host_os=host_os,
+            _visited=visited,
+        )
+        for child_name in child_deployments
+        if child_name not in visited
+    ]
+
+    collection_errors: list[str] = []
+    for result in (show_result, error_result, operations_result):
+        if "COMMAND FAILED" in result:
+            collection_errors.append(result)
+
+    return {
+        "deployment_name": deployment_name,
+        "provisioning_state": properties.get("provisioningState")
+        if isinstance(properties, dict)
+        else None,
+        "timestamp": properties.get("timestamp")
+        if isinstance(properties, dict)
+        else None,
+        "error": error_payload,
+        "failed_operations": failed_operations,
+        "nested": nested,
+        "collection_errors": collection_errors[:3],
+    }
+
+
+def collect_container_app_diagnostics(
+    resource_group: str,
+    app_name: str = DEFAULT_CONTAINER_APP_NAME,
+    host_os: str | None = None,
+) -> dict[str, Any]:
+    """Gather Container App state, revisions, and system logs when available."""
+    app_result = get_container_app(
+        resource_group=resource_group,
+        app_name=app_name,
+        host_os=host_os,
+    )
+    app_payload = _parse_json_output(app_result)
+
+    revisions_result = list_container_app_revisions(
+        resource_group=resource_group,
+        app_name=app_name,
+        host_os=host_os,
+    )
+    revisions_payload = _parse_json_output(revisions_result)
+    revision_name = ""
+    if isinstance(revisions_payload, list):
+        for revision in revisions_payload:
+            if not isinstance(revision, dict):
+                continue
+            candidate = str(revision.get("name") or "").strip()
+            if candidate:
+                revision_name = candidate
+                break
+
+    system_logs: Any = None
+    if revision_name:
+        logs_result = get_container_app_system_logs(
+            resource_group=resource_group,
+            app_name=app_name,
+            tail=50,
+            revision=revision_name,
+            host_os=host_os,
+        )
+        system_logs = _parse_json_output(logs_result)
+        if system_logs is None and "COMMAND FAILED" not in logs_result:
+            system_logs = logs_result.strip()
+
+    return {
+        "app": app_payload,
+        "revisions": revisions_payload if isinstance(revisions_payload, list) else [],
+        "latest_revision": revision_name or None,
+        "system_logs": system_logs,
+    }
+
+
 def list_deleted_key_vaults(host_os: str | None = None) -> str:
     """List deleted Key Vaults visible to the active subscription."""
     return _run(
@@ -582,7 +904,7 @@ def check_deployment_status(
             "containerapp",
             "show",
             "--name",
-            "sao-app",
+            DEFAULT_CONTAINER_APP_NAME,
             "--resource-group",
             resource_group,
             "--query",

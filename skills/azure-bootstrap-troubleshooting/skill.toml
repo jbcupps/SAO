@@ -1,0 +1,18 @@
+[skill]
+name = "azure-bootstrap-troubleshooting"
+version = "0.1.0"
+description = "Structured Azure bootstrap diagnostics and guided recovery suggestions"
+
+[skill.tier]
+target = "ego"
+
+[skill.constraints]
+max_results = 1
+pii_allowed = false
+
+[skill.ego]
+playbook = "how-to-use.md"
+
+[skill.tool]
+crate = "skill-azure-bootstrap-troubleshooting"
+entrypoint = "execute"

@@ -82,6 +82,16 @@ class AzureToolTests(unittest.TestCase):
         self.assertTrue(
             azure.is_safe_read_only_az_args(["keyvault", "list-deleted"])
         )
+        self.assertTrue(
+            azure.is_safe_read_only_az_args(
+                ["containerapp", "revision", "list", "--name", "sao-app"]
+            )
+        )
+        self.assertTrue(
+            azure.is_safe_read_only_az_args(
+                ["containerapp", "logs", "show", "--name", "sao-app"]
+            )
+        )
         self.assertFalse(
             azure.is_safe_read_only_az_args(
                 ["group", "create", "--name", "sao-rg"]
@@ -156,6 +166,42 @@ class AzureToolTests(unittest.TestCase):
                 "adminOid=oid-123",
                 "saoImageTag=latest",
                 "nameSuffix=a7c",
+                "--output",
+                "json",
+            ],
+        )
+
+    def test_validate_infrastructure_provisioning_supports_image_override(self):
+        result = Mock(returncode=0, stdout='{"status":"Valid"}', stderr="")
+
+        with patch.object(
+            azure, "_resolve_azure_cli_path", return_value="/usr/bin/az"
+        ), patch("tools.azure.subprocess.run", return_value=result) as run_mock:
+            azure.validate_infrastructure_provisioning(
+                resource_group="sao-rg",
+                location="eastus2",
+                admin_oid="oid-123",
+                host_os="windows",
+                sao_image="ghcr.io/example/sao:v2",
+            )
+
+        self.assertEqual(
+            run_mock.call_args.args[0],
+            [
+                "/usr/bin/az",
+                "deployment",
+                "group",
+                "validate",
+                "--name",
+                azure.DEFAULT_DEPLOYMENT_NAME,
+                "--resource-group",
+                "sao-rg",
+                "--template-file",
+                "/app/bicep/main.bicep",
+                "--parameters",
+                "location=eastus2",
+                "adminOid=oid-123",
+                "saoImage=ghcr.io/example/sao:v2",
                 "--output",
                 "json",
             ],
@@ -238,6 +284,84 @@ class AzureToolTests(unittest.TestCase):
                 "--output",
                 "json",
             ],
+        )
+
+    def test_collect_group_deployment_diagnostics_recurses_nested_failures(self):
+        top_show = '{"properties":{"provisioningState":"Failed","timestamp":"2026-03-15T12:05:00Z"}}'
+        child_show = '{"properties":{"provisioningState":"Failed","timestamp":"2026-03-15T12:05:30Z"}}'
+        top_error = '{"code":"DeploymentFailed","message":"See nested deployment."}'
+        child_error = (
+            '{"code":"ContainerAppOperationError","message":"DENIED: requested access to the resource is denied"}'
+        )
+        top_ops = (
+            '[{"properties":{"provisioningState":"Failed","targetResource":{"resourceType":"Microsoft.Resources/deployments","resourceName":"container-app"},"statusMessage":{"error":{"code":"DeploymentFailed","message":"nested failed"}}}}]'
+        )
+        child_ops = (
+            '[{"properties":{"provisioningState":"Failed","targetResource":{"resourceType":"Microsoft.App/containerApps","resourceName":"sao-app"},"statusMessage":{"error":{"code":"ContainerAppOperationError","message":"DENIED: requested access to the resource is denied"}}}}]'
+        )
+
+        def fake_show(resource_group: str, deployment_name: str, host_os: str | None = None):
+            return top_show if deployment_name == "sao-bootstrap" else child_show
+
+        def fake_error(resource_group: str, deployment_name: str, host_os: str | None = None):
+            return top_error if deployment_name == "sao-bootstrap" else child_error
+
+        def fake_ops(resource_group: str, deployment_name: str, host_os: str | None = None):
+            return top_ops if deployment_name == "sao-bootstrap" else child_ops
+
+        with patch("tools.azure.get_group_deployment", side_effect=fake_show), patch(
+            "tools.azure.get_group_deployment_error", side_effect=fake_error
+        ), patch(
+            "tools.azure.list_group_deployment_operations", side_effect=fake_ops
+        ):
+            diagnostics = azure.collect_group_deployment_diagnostics(
+                resource_group="sao-rg",
+                deployment_name="sao-bootstrap",
+                host_os="windows",
+            )
+
+        self.assertEqual(diagnostics["deployment_name"], "sao-bootstrap")
+        self.assertEqual(diagnostics["nested"][0]["deployment_name"], "container-app")
+        self.assertEqual(
+            diagnostics["nested"][0]["failed_operations"][0]["resource_name"],
+            "sao-app",
+        )
+        self.assertEqual(
+            diagnostics["nested"][0]["failed_operations"][0]["resource_type"],
+            "Microsoft.App/containerApps",
+        )
+
+    def test_collect_container_app_diagnostics_reads_revisions_and_logs(self):
+        app_payload = (
+            '{"properties":{"provisioningState":"Failed","template":{"containers":[{"image":"ghcr.io/jbcupps/sao:latest"}]}}}'
+        )
+        revisions_payload = '[{"name":"sao-app--rev1"}]'
+        logs_payload = '{"messages":["pull failed"]}'
+
+        with patch(
+            "tools.azure.get_container_app", return_value=app_payload
+        ), patch(
+            "tools.azure.list_container_app_revisions",
+            return_value=revisions_payload,
+        ), patch(
+            "tools.azure.get_container_app_system_logs",
+            return_value=logs_payload,
+        ) as logs_mock:
+            diagnostics = azure.collect_container_app_diagnostics(
+                resource_group="sao-rg",
+                app_name="sao-app",
+                host_os="windows",
+            )
+
+        self.assertEqual(diagnostics["latest_revision"], "sao-app--rev1")
+        self.assertEqual(diagnostics["app"]["properties"]["provisioningState"], "Failed")
+        self.assertEqual(diagnostics["system_logs"]["messages"][0], "pull failed")
+        logs_mock.assert_called_once_with(
+            resource_group="sao-rg",
+            app_name="sao-app",
+            tail=50,
+            revision="sao-app--rev1",
+            host_os="windows",
         )
 
 

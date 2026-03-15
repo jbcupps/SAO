@@ -7,6 +7,9 @@ param adminOid string
 @description('SAO container image tag')
 param saoImageTag string = 'latest'
 
+@description('Optional full SAO container image reference override')
+param saoImage string = ''
+
 @description('Optional short suffix used to avoid global name collisions')
 @maxLength(3)
 param nameSuffix string = ''
@@ -17,6 +20,7 @@ param pgAdminPassword string = newGuid()
 
 var normalizedSuffix = empty(nameSuffix) ? '' : '-${toLower(nameSuffix)}'
 var baseName = 'sao-${uniqueString(resourceGroup().id)}${normalizedSuffix}'
+var resolvedSaoImage = empty(saoImage) ? 'ghcr.io/jbcupps/sao:${saoImageTag}' : saoImage
 
 module postgres 'modules/postgres.bicep' = {
   name: 'postgres'
@@ -42,7 +46,7 @@ module containerApp 'modules/container-app.bicep' = {
     location: location
     appName: 'sao-app'
     envName: '${baseName}-env'
-    saoImageTag: saoImageTag
+    saoImage: resolvedSaoImage
     databaseUrl: postgres.outputs.connectionString
     keyVaultUri: keyVault.outputs.vaultUri
     adminOid: adminOid
