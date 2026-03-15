@@ -129,7 +129,10 @@ class InstallerAgentTests(unittest.TestCase):
         self.assertEqual(approval_prompts, ["Approve this read-only batch? (y/n) "])
         self.assertEqual(dispatch_mock.call_count, 2)
         output = stdout.getvalue()
-        self.assertIn("Here's what I'm about to do and why:", output)
+        self.assertIn(
+            "Next I need to run a read-only discovery batch",
+            output,
+        )
         self.assertIn(REQUIRED_CHECKIN, output)
 
     def test_subscription_and_provisioning_require_separate_approvals(self):
@@ -238,6 +241,9 @@ class InstallerAgentTests(unittest.TestCase):
         )
 
         with patch(
+            "tools.azure.validate_infrastructure_provisioning",
+            return_value='{"status":"Valid"}',
+        ), patch(
             "tools.azure.start_infrastructure_provisioning",
             return_value="",
         ), patch(
@@ -303,6 +309,9 @@ class InstallerAgentTests(unittest.TestCase):
         )
 
         with patch(
+            "tools.azure.validate_infrastructure_provisioning",
+            return_value='{"status":"Valid"}',
+        ), patch(
             "tools.azure.start_infrastructure_provisioning",
             return_value="",
         ), patch(
@@ -339,11 +348,31 @@ class InstallerAgentTests(unittest.TestCase):
         agent = self._make_agent([])
 
         with patch(
+            "tools.azure.validate_infrastructure_provisioning",
+            return_value='{"status":"Valid"}',
+        ), patch(
             "tools.azure.start_infrastructure_provisioning",
             return_value="",
         ), patch(
             "tools.azure.get_group_deployment_status",
             return_value='{"state":"Failed","timestamp":"2026-03-15T12:05:00Z"}',
+        ), patch(
+            "tools.azure.get_group_deployment_error",
+            return_value=(
+                '{"code":"Conflict","message":"Vault name '
+                '\'sao-abc-kv\' is already in use."}'
+            ),
+        ), patch(
+            "tools.azure.list_group_deployment_operations",
+            return_value=(
+                '[{"properties":{"provisioningState":"Failed",'
+                '"targetResource":{"resourceType":"Microsoft.KeyVault/vaults",'
+                '"resourceName":"sao-abc-kv"},'
+                '"statusMessage":{"message":"Vault name is already in use."}}}]'
+            ),
+        ), patch(
+            "tools.azure.list_deleted_key_vaults",
+            return_value="[]",
         ), patch("sys.stdout", new=io.StringIO()):
             result = agent._run_provisioning_with_polling(
                 {
@@ -355,7 +384,149 @@ class InstallerAgentTests(unittest.TestCase):
             )
 
         self.assertIn("COMMAND FAILED", result)
-        self.assertIn("state Failed", result)
+        self.assertIn("Azure reported:", result)
+        self.assertIn("Failing operations:", result)
+        self.assertIn("Suggested recovery:", result)
+
+    def test_provisioning_validation_soft_delete_collision_can_purge_and_continue(self):
+        agent = self._make_agent([])
+        prompts: list[str] = []
+        stdout = io.StringIO()
+        validation_results = iter(
+            [
+                (
+                    "COMMAND FAILED (exit 1):\nConflict: Vault name "
+                    "'sao-abc-kv' is deleted but recoverable."
+                ),
+                '{"status":"Valid"}',
+            ]
+        )
+
+        def fake_input(prompt: str) -> str:
+            prompts.append(prompt)
+            return "y"
+
+        with patch(
+            "tools.azure.validate_infrastructure_provisioning",
+            side_effect=lambda **kwargs: next(validation_results),
+        ), patch(
+            "tools.azure.get_group_deployment_error",
+            return_value=(
+                '{"code":"Conflict","message":"Vault name '
+                '\'sao-abc-kv\' is deleted but recoverable."}'
+            ),
+        ), patch(
+            "tools.azure.list_group_deployment_operations",
+            return_value="[]",
+        ), patch(
+            "tools.azure.list_deleted_key_vaults",
+            return_value='[{"name":"sao-abc-kv","location":"eastus2"}]',
+        ), patch(
+            "tools.azure.purge_deleted_key_vault",
+            return_value=(
+                "Purge requested for deleted Key Vault sao-abc-kv in eastus2. "
+                "Azure is clearing the soft-deleted name so the deployment can "
+                "reuse it."
+            ),
+        ) as purge_mock, patch(
+            "tools.azure.start_infrastructure_provisioning",
+            return_value="",
+        ) as start_mock, patch(
+            "tools.azure.get_group_deployment_status",
+            return_value='{"state":"Succeeded","timestamp":"2026-03-15T12:01:00Z"}',
+        ), patch(
+            "tools.azure.get_group_deployment_endpoint",
+            return_value="sao.example.com",
+        ), patch(
+            "tools.azure.check_deployment_status",
+            return_value='Endpoint: https://sao.example.com\nHealth: {"status":"ok"}',
+        ), patch(
+            "builtins.input", side_effect=fake_input
+        ), patch("sys.stdout", new=stdout):
+            result = agent._run_provisioning_with_polling(
+                {
+                    "resource_group": "sao-rg",
+                    "location": "eastus2",
+                    "admin_oid": "oid-123",
+                },
+                host_os="windows",
+            )
+
+        self.assertIn('"provisioning_state": "Succeeded"', result)
+        purge_mock.assert_called_once_with(
+            "sao-abc-kv", "eastus2", host_os="windows"
+        )
+        start_mock.assert_called_once()
+        self.assertEqual(
+            prompts,
+            [
+                "This looks like a soft-delete collision — would you like me to purge it and continue? (y/n) ",
+            ],
+        )
+        self.assertIn("soft-delete collision", stdout.getvalue())
+
+    def test_provisioning_validation_name_conflict_can_retry_with_suffix(self):
+        agent = self._make_agent([])
+        stdout = io.StringIO()
+        validation_results = iter(
+            [
+                (
+                    "COMMAND FAILED (exit 1):\nConflict: Vault name "
+                    "'sao-abc-kv' is already in use."
+                ),
+                '{"status":"Valid"}',
+            ]
+        )
+
+        with patch.object(
+            agent, "_suggest_name_suffix", return_value="a7c"
+        ), patch(
+            "tools.azure.validate_infrastructure_provisioning",
+            side_effect=lambda **kwargs: next(validation_results),
+        ), patch(
+            "tools.azure.get_group_deployment_error",
+            return_value=(
+                '{"code":"Conflict","message":"Vault name '
+                '\'sao-abc-kv\' is already in use."}'
+            ),
+        ), patch(
+            "tools.azure.list_group_deployment_operations",
+            return_value="[]",
+        ), patch(
+            "tools.azure.list_deleted_key_vaults",
+            return_value="[]",
+        ), patch(
+            "tools.azure.start_infrastructure_provisioning",
+            return_value="",
+        ) as start_mock, patch(
+            "tools.azure.get_group_deployment_status",
+            return_value='{"state":"Succeeded","timestamp":"2026-03-15T12:01:00Z"}',
+        ), patch(
+            "tools.azure.get_group_deployment_endpoint",
+            return_value="sao.example.com",
+        ), patch(
+            "tools.azure.check_deployment_status",
+            return_value='Endpoint: https://sao.example.com\nHealth: {"status":"ok"}',
+        ), patch(
+            "builtins.input",
+            side_effect=lambda prompt: "y",
+        ), patch("sys.stdout", new=stdout):
+            result = agent._run_provisioning_with_polling(
+                {
+                    "resource_group": "sao-rg",
+                    "location": "eastus2",
+                    "admin_oid": "oid-123",
+                },
+                host_os="windows",
+            )
+
+        self.assertIn('"provisioning_state": "Succeeded"', result)
+        self.assertIn('"name_suffix": "a7c"', result)
+        self.assertEqual(
+            start_mock.call_args.kwargs["name_suffix"],
+            "a7c",
+        )
+        self.assertIn("retry with a short suffix like a7c", stdout.getvalue())
 
     def test_declined_write_step_does_not_execute_tool(self):
         responses = [
@@ -525,7 +696,7 @@ class InstallerAgentTests(unittest.TestCase):
             ],
         )
         output = stdout.getvalue()
-        self.assertIn("Here's what I'm about to do and why:", output)
+        self.assertIn("Let me quickly confirm the cleanup plan:", output)
         self.assertIn("Target resource group: sao-rg", output)
         self.assertIn("Cleanup summary:", output)
         self.assertIn(

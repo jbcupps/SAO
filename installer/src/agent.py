@@ -2,10 +2,12 @@
 
 import json
 import os
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import anthropic
 
@@ -190,64 +192,68 @@ REQUIRED_CHECKIN = "Does this look correct? Do you have any questions before we 
 PHASE_DETAILS = {
     "authentication": {
         "title": "Authentication",
+        "lead_in": "Here's what I'm about to do and why:",
         "intro": (
-            "I am about to start Azure device-code authentication so this "
-            "session can prove your identity without creating any local "
-            "credentials."
+            "start Azure device-code authentication so this session can prove "
+            "your identity without creating any local credentials."
         ),
     },
     "read_only_discovery": {
         "title": "Read-only Discovery",
+        "lead_in": "Next I need to",
         "intro": (
-            "I am about to run a read-only discovery batch so we can confirm "
-            "who is signed in, inspect your subscriptions, and verify Azure "
-            "permissions before we make any changes."
+            "run a read-only discovery batch so we can confirm who is signed "
+            "in, inspect your subscriptions, and verify Azure permissions "
+            "before we make any changes."
         ),
     },
     "subscription_selection": {
         "title": "Subscription Selection",
+        "lead_in": "Now we're ready to",
         "intro": (
-            "I am about to set the active Azure subscription for the rest of "
-            "this installer session so every later action lands in the right "
-            "place."
+            "set the active Azure subscription for the rest of this installer "
+            "session so every later action lands in the right place."
         ),
     },
     "resource_group": {
         "title": "Resource Group",
+        "lead_in": "Next I need to",
         "intro": (
-            "I am about to create the SAO resource group so the deployment has "
-            "a dedicated boundary in Azure."
+            "create the SAO resource group so the deployment has a dedicated "
+            "boundary in Azure."
         ),
     },
     "cleanup": {
         "title": "Cleanup",
+        "lead_in": "Let me quickly confirm the cleanup plan:",
         "intro": (
-            "I am about to remove the selected SAO test resource group. This "
-            "is safe because Azure will delete only the resources contained in "
-            "that dedicated group, not anything outside it."
+            "remove the selected SAO test resource group. This is safe because "
+            "Azure will delete only the resources contained in that dedicated "
+            "group, not anything outside it."
         ),
     },
     "provisioning": {
         "title": "Provisioning",
+        "lead_in": "Now we're ready to",
         "intro": (
-            "I am about to deploy the SAO infrastructure into Azure. This is "
-            "the first major write phase and it will create the runtime "
-            "resources the platform needs."
+            "deploy the SAO infrastructure into Azure. This is the main write "
+            "phase and it will create the runtime resources the platform needs."
         ),
     },
     "verification": {
         "title": "Verification",
+        "lead_in": "Let me quickly check",
         "intro": (
-            "I am about to run post-deployment verification checks so we can "
-            "confirm the SAO endpoint is reachable and healthy."
+            "the deployed endpoint and health status so we can confirm the SAO "
+            "environment is reachable and healthy."
         ),
     },
     "custom_command": {
         "title": "Custom Azure Command",
+        "lead_in": "Before I run this custom Azure command:",
         "intro": (
-            "I am about to run a custom Azure CLI command that falls outside "
-            "the dedicated installer tools, so I want to make the exact action "
-            "and its impact clear first."
+            "I want to make the exact action and its impact clear because it "
+            "falls outside the dedicated installer tools."
         ),
     },
 }
@@ -262,6 +268,15 @@ class ToolExecutionPolicy:
     batchable: bool
     preview_text: str
     order: int
+
+
+@dataclass(frozen=True)
+class ProvisioningRecoveryDecision:
+    """Result of a provisioning recovery analysis."""
+
+    action: str
+    name_suffix: str | None = None
+    message: str | None = None
 
 
 TOOL_POLICIES = {
@@ -349,6 +364,7 @@ class InstallerAgent:
             "resource_group": None,
             "location": None,
             "deployment_name": None,
+            "name_suffix": "",
             "sao_endpoint": None,
         }
 
@@ -435,10 +451,7 @@ class InstallerAgent:
             raise ValueError("Cleanup mode requires a resource group name.")
 
         print(f"\n{PHASE_DETAILS['cleanup']['title']}")
-        print(
-            "Here's what I'm about to do and why: "
-            f"{PHASE_DETAILS['cleanup']['intro']}"
-        )
+        print(self._phase_intro_text("cleanup"))
         print("Planned Azure CLI commands:")
         for command in self._build_preview_commands(
             "delete_resource_group",
@@ -455,7 +468,7 @@ class InstallerAgent:
             print("Cleanup cancelled. No Azure resources were changed.")
             return False
 
-        print("\nRunning resource group cleanup...")
+        print("\nStarting resource group cleanup...")
         result = self._dispatch_tool(
             "delete_resource_group",
             {"resource_group": normalized_resource_group},
@@ -541,6 +554,362 @@ class InstallerAgent:
             f"means. Then ask exactly: {REQUIRED_CHECKIN} "
             "Do not call any tools in this response."
         )
+
+    def _phase_intro_text(self, phase: str) -> str:
+        """Render a natural-sounding phase introduction."""
+        phase_detail = PHASE_DETAILS[phase]
+        lead_in = phase_detail.get("lead_in", "Here's what I'm about to do and why:")
+        intro = phase_detail["intro"]
+        if lead_in.endswith(":"):
+            return f"{lead_in} {intro}"
+        return f"{lead_in} {intro}"
+
+    def _normalize_name_suffix(self, value: str | None) -> str:
+        """Clamp suggested name suffixes to the short Azure-safe form we use."""
+        normalized = re.sub(r"[^a-z0-9]", "", (value or "").lower())
+        return normalized[:3]
+
+    def _suggest_name_suffix(self) -> str:
+        """Generate a short suffix for collision retries."""
+        suggested = self._normalize_name_suffix(uuid4().hex)
+        return suggested or "001"
+
+    def _dedupe_lines(self, lines: list[str]) -> list[str]:
+        """Preserve order while removing duplicate diagnostic lines."""
+        seen: set[str] = set()
+        unique_lines: list[str] = []
+        for line in lines:
+            normalized = line.strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            unique_lines.append(normalized)
+        return unique_lines
+
+    def _extract_error_messages(self, payload: Any) -> list[str]:
+        """Flatten nested Azure error payloads into readable lines."""
+        if payload is None:
+            return []
+
+        if isinstance(payload, str):
+            text = payload.strip()
+            if not text or text.lower() == "null":
+                return []
+            parsed = self._try_parse_json(text)
+            if parsed is not None and parsed != text:
+                return self._extract_error_messages(parsed)
+            return [text]
+
+        if isinstance(payload, list):
+            messages: list[str] = []
+            for item in payload:
+                messages.extend(self._extract_error_messages(item))
+            return self._dedupe_lines(messages)
+
+        if isinstance(payload, dict):
+            messages: list[str] = []
+            code = payload.get("code")
+            message = payload.get("message")
+            if code and message:
+                messages.append(f"{code}: {message}")
+            elif message:
+                messages.append(str(message))
+            elif code and not any(
+                key in payload
+                for key in ("error", "details", "innererror", "statusMessage")
+            ):
+                messages.append(str(code))
+
+            for key in (
+                "error",
+                "details",
+                "innererror",
+                "statusMessage",
+                "additionalInfo",
+                "info",
+            ):
+                if key in payload:
+                    messages.extend(self._extract_error_messages(payload[key]))
+            return self._dedupe_lines(messages)
+
+        return [str(payload)]
+
+    def _extract_failed_operation_summaries(
+        self, operations_payload: Any
+    ) -> list[str]:
+        """Summarize failed ARM deployment operations."""
+        if not isinstance(operations_payload, list):
+            return []
+
+        summaries: list[str] = []
+        for operation in operations_payload:
+            if not isinstance(operation, dict):
+                continue
+            properties = operation.get("properties", {})
+            if not isinstance(properties, dict):
+                continue
+
+            state = str(
+                properties.get(
+                    "provisioningState",
+                    operation.get("provisioningState", ""),
+                )
+            )
+            status_messages = self._extract_error_messages(
+                properties.get("statusMessage")
+            )
+            if state not in {"Failed", "Canceled"} and not status_messages:
+                continue
+
+            target_resource = properties.get("targetResource", {})
+            if not isinstance(target_resource, dict):
+                target_resource = {}
+
+            resource_type = str(
+                target_resource.get("resourceType")
+                or target_resource.get("type")
+                or ""
+            ).strip()
+            resource_name = str(
+                target_resource.get("resourceName")
+                or target_resource.get("name")
+                or ""
+            ).strip()
+            target_label = "/".join(
+                part for part in (resource_type, resource_name) if part
+            )
+            if not target_label:
+                target_label = "Deployment operation"
+
+            summary = target_label
+            if state:
+                summary = f"{summary} ({state})"
+            if status_messages:
+                summary = f"{summary}: {status_messages[0]}"
+            summaries.append(summary)
+
+        return self._dedupe_lines(summaries)
+
+    def _extract_key_vault_name(self, text: str) -> str | None:
+        """Pull the most likely Key Vault name out of Azure error text."""
+        lowered_text = text.lower()
+        patterns = [
+            r"(?:key vault|vault)\s+'([a-z0-9][a-z0-9-]{1,22})'",
+            r'"([a-z0-9][a-z0-9-]{1,22}-kv)"',
+            r"\b([a-z0-9][a-z0-9-]{1,22}-kv)\b",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, lowered_text)
+            if match:
+                return match.group(1)
+        return None
+
+    def _find_deleted_key_vault(
+        self, deleted_vaults_payload: Any, vault_name: str
+    ) -> dict[str, str] | None:
+        """Match a deleted Key Vault payload entry by name."""
+        if not isinstance(deleted_vaults_payload, list):
+            return None
+
+        normalized_name = vault_name.strip().lower()
+        for entry in deleted_vaults_payload:
+            if not isinstance(entry, dict):
+                continue
+
+            candidate_names = [
+                entry.get("name"),
+                entry.get("vaultName"),
+            ]
+            properties = entry.get("properties", {})
+            if not isinstance(properties, dict):
+                properties = {}
+            else:
+                candidate_names.append(properties.get("vaultName"))
+
+            if normalized_name not in {
+                str(name).strip().lower()
+                for name in candidate_names
+                if name
+            }:
+                continue
+
+            location = str(
+                entry.get("location")
+                or properties.get("location")
+                or properties.get("scheduledPurgeDate")
+                or ""
+            ).strip()
+            if location and "t" in location.lower() and ":" in location:
+                location = ""
+
+            return {
+                "name": normalized_name,
+                "location": location,
+            }
+        return None
+
+    def _analyze_provisioning_failure(
+        self,
+        resource_group: str,
+        deployment_name: str,
+        host_os: str,
+        initial_failure: str | None = None,
+    ) -> dict[str, Any]:
+        """Collect Azure deployment diagnostics and infer likely recovery paths."""
+        from tools.azure import (
+            get_group_deployment_error,
+            list_deleted_key_vaults,
+            list_group_deployment_operations,
+        )
+
+        evidence_lines = self._extract_error_messages(initial_failure)
+
+        deployment_error_result = get_group_deployment_error(
+            resource_group=resource_group,
+            deployment_name=deployment_name,
+            host_os=host_os,
+        )
+        if (
+            "COMMAND FAILED" not in deployment_error_result
+            and "COMMAND CANCELLED" not in deployment_error_result
+            and deployment_error_result.strip()
+            and deployment_error_result.strip() != "null"
+        ):
+            parsed_deployment_error = (
+                self._try_parse_json(deployment_error_result)
+                or deployment_error_result
+            )
+            evidence_lines.extend(
+                self._extract_error_messages(parsed_deployment_error)
+            )
+
+        operations_result = list_group_deployment_operations(
+            resource_group=resource_group,
+            deployment_name=deployment_name,
+            host_os=host_os,
+        )
+        failed_operations: list[str] = []
+        if (
+            "COMMAND FAILED" not in operations_result
+            and "COMMAND CANCELLED" not in operations_result
+        ):
+            parsed_operations = self._try_parse_json(operations_result)
+            failed_operations = self._extract_failed_operation_summaries(
+                parsed_operations
+            )
+            evidence_lines.extend(failed_operations)
+
+        evidence_lines = self._dedupe_lines(evidence_lines)
+        combined_evidence = "\n".join(evidence_lines)
+        lowered_evidence = combined_evidence.lower()
+        key_vault_name = self._extract_key_vault_name(combined_evidence)
+
+        soft_delete_markers = (
+            "soft-delete",
+            "soft delete",
+            "deleted but recoverable",
+            "scheduled for deletion",
+            "recoverable deleted",
+        )
+        conflict_markers = (
+            "already exists",
+            "already in use",
+            "conflict",
+            "is not available",
+            "reserved",
+        )
+
+        deleted_vault_match: dict[str, str] | None = None
+        if key_vault_name:
+            deleted_vaults_result = list_deleted_key_vaults(host_os=host_os)
+            if (
+                "COMMAND FAILED" not in deleted_vaults_result
+                and "COMMAND CANCELLED" not in deleted_vaults_result
+            ):
+                parsed_deleted_vaults = self._try_parse_json(
+                    deleted_vaults_result
+                )
+                deleted_vault_match = self._find_deleted_key_vault(
+                    parsed_deleted_vaults, key_vault_name
+                )
+
+        soft_delete_collision = any(
+            marker in lowered_evidence for marker in soft_delete_markers
+        ) or deleted_vault_match is not None
+        name_conflict = (
+            key_vault_name is not None
+            and any(marker in lowered_evidence for marker in conflict_markers)
+        )
+
+        suggestions: list[str] = []
+        if deleted_vault_match is not None:
+            location = deleted_vault_match["location"] or self.installer_state[
+                "location"
+            ]
+            suggestions.append(
+                "This looks like a soft-delete collision for Key Vault "
+                f"{deleted_vault_match['name']} in {location}."
+            )
+            suggestions.append(
+                "I can purge the deleted vault and retry, or keep it and use a "
+                "short suffix to generate a new global name."
+            )
+        elif name_conflict and key_vault_name:
+            suggestions.append(
+                f"The deployment is colliding with the global Key Vault name {key_vault_name}."
+            )
+            suggestions.append(
+                "A short suffix retry will generate a fresh set of resource names."
+            )
+        else:
+            suggestions.append(
+                "The deployment operations identify the first failing Azure resource."
+            )
+            suggestions.append(
+                "If this was a test run, cleanup is the safest reset before retrying."
+            )
+
+        return {
+            "evidence": evidence_lines[:6],
+            "failed_operations": failed_operations[:4],
+            "soft_delete_collision": soft_delete_collision,
+            "deleted_vault": deleted_vault_match,
+            "name_conflict": name_conflict,
+            "key_vault_name": key_vault_name,
+            "suggestions": suggestions,
+        }
+
+    def _format_provisioning_failure_message(
+        self,
+        deployment_name: str,
+        context_label: str,
+        diagnostics: dict[str, Any],
+    ) -> str:
+        """Render a concise but actionable provisioning failure summary."""
+        lines = [
+            "COMMAND FAILED: "
+            f"{context_label} for Azure deployment {deployment_name} did not succeed."
+        ]
+
+        evidence = diagnostics.get("evidence", [])
+        if evidence:
+            lines.append("Azure reported:")
+            for line in evidence[:3]:
+                lines.append(f"- {line}")
+
+        failed_operations = diagnostics.get("failed_operations", [])
+        if failed_operations:
+            lines.append("Failing operations:")
+            for line in failed_operations[:2]:
+                lines.append(f"- {line}")
+
+        suggestions = diagnostics.get("suggestions", [])
+        if suggestions:
+            lines.append("Suggested recovery:")
+            for line in suggestions[:2]:
+                lines.append(f"- {line}")
+
+        return "\n".join(lines)
 
     def _get_tool_policy(
         self, name: str, args: dict[str, Any]
@@ -672,7 +1041,36 @@ class InstallerAgent:
             ]
 
         if name == "provision_infrastructure":
+            name_suffix = self._normalize_name_suffix(
+                args.get("name_suffix")
+                or self.installer_state.get("name_suffix")
+            )
+            parameter_args = [
+                "--parameters",
+                f"location={args['location']}",
+                f"adminOid={args['admin_oid']}",
+                "saoImageTag=latest",
+            ]
+            if name_suffix:
+                parameter_args.append(f"nameSuffix={name_suffix}")
             return [
+                format_az_command(
+                    [
+                        "deployment",
+                        "group",
+                        "validate",
+                        "--name",
+                        DEFAULT_DEPLOYMENT_NAME,
+                        "--resource-group",
+                        args["resource_group"],
+                        "--template-file",
+                        "/app/bicep/main.bicep",
+                        *parameter_args,
+                        "--output",
+                        "json",
+                    ],
+                    host_os=host_os,
+                ),
                 format_az_command(
                     [
                         "deployment",
@@ -684,10 +1082,7 @@ class InstallerAgent:
                         args["resource_group"],
                         "--template-file",
                         "/app/bicep/main.bicep",
-                        "--parameters",
-                        f"location={args['location']}",
-                        f"adminOid={args['admin_oid']}",
-                        "saoImageTag=latest",
+                        *parameter_args,
                         "--no-wait",
                         "--output",
                         "json",
@@ -891,6 +1286,91 @@ class InstallerAgent:
         if health_summary:
             print(f"Health check: {health_summary}")
 
+    def _offer_preflight_recovery(
+        self,
+        diagnostics: dict[str, Any],
+        resource_group: str,
+        location: str,
+        host_os: str,
+    ) -> ProvisioningRecoveryDecision:
+        """Offer safe retry options for preflight naming collisions."""
+        from tools.azure import format_az_command, purge_deleted_key_vault
+
+        deleted_vault = diagnostics.get("deleted_vault")
+        key_vault_name = diagnostics.get("key_vault_name")
+
+        if deleted_vault is not None:
+            vault_name = deleted_vault["name"]
+            purge_location = deleted_vault["location"] or location
+            print("\nTroubleshooting:")
+            print(
+                "This looks like a soft-delete collision — the deployment is "
+                f"trying to reuse Key Vault name {vault_name}, and Azure still "
+                "has that name reserved."
+            )
+            print("Recovery command I can run for you:")
+            print(
+                "  - "
+                + format_az_command(
+                    [
+                        "keyvault",
+                        "purge",
+                        "--name",
+                        vault_name,
+                        "--location",
+                        purge_location,
+                    ],
+                    host_os=host_os,
+                )
+            )
+            if self._confirm_yes_no(
+                "This looks like a soft-delete collision — would you like me "
+                "to purge it and continue? (y/n) "
+            ):
+                print(f"\nPurging deleted Key Vault {vault_name}...")
+                purge_result = purge_deleted_key_vault(
+                    vault_name,
+                    purge_location,
+                    host_os=host_os,
+                )
+                print(purge_result)
+                if "COMMAND FAILED" in purge_result:
+                    return ProvisioningRecoveryDecision(
+                        action="fail",
+                        message=purge_result,
+                    )
+                self.installer_state["name_suffix"] = ""
+                return ProvisioningRecoveryDecision(action="retry")
+
+        if diagnostics.get("name_conflict") and key_vault_name:
+            suggested_suffix = self._suggest_name_suffix()
+            print("\nTroubleshooting:")
+            print(
+                f"Azure is reporting a name collision for Key Vault {key_vault_name}."
+            )
+            print(
+                "If that name came from an old test environment, cleanup is a "
+                "good reset. If you want to keep moving now, I can retry with a "
+                f"short suffix like {suggested_suffix}."
+            )
+            if self._confirm_yes_no(
+                f"Retry this deployment with suffix {suggested_suffix}? (y/n) "
+            ):
+                self.installer_state["name_suffix"] = suggested_suffix
+                return ProvisioningRecoveryDecision(
+                    action="retry",
+                    name_suffix=suggested_suffix,
+                )
+
+        return ProvisioningRecoveryDecision(
+            action="fail",
+            message=self._format_provisioning_failure_message(
+                DEFAULT_DEPLOYMENT_NAME,
+                "Provisioning preflight",
+                diagnostics,
+            ),
+        )
+
     def _run_provisioning_with_polling(
         self, args: dict[str, Any], host_os: str
     ) -> str:
@@ -900,6 +1380,7 @@ class InstallerAgent:
             get_group_deployment_endpoint,
             get_group_deployment_status,
             start_infrastructure_provisioning,
+            validate_infrastructure_provisioning,
         )
 
         resource_group = args["resource_group"]
@@ -912,125 +1393,198 @@ class InstallerAgent:
         self.installer_state["location"] = location
         self.installer_state["admin_oid"] = admin_oid
 
-        start_result = start_infrastructure_provisioning(
-            resource_group=resource_group,
-            location=location,
-            admin_oid=admin_oid,
-            host_os=host_os,
-            deployment_name=deployment_name,
-        )
-        if "COMMAND FAILED" in start_result or "COMMAND CANCELLED" in start_result:
-            return start_result
-
-        poll_started_at = time.monotonic()
-
-        while True:
-            status_result = get_group_deployment_status(
-                resource_group=resource_group,
-                deployment_name=deployment_name,
-                host_os=host_os,
+        attempt_count = 0
+        while attempt_count < 3:
+            attempt_count += 1
+            name_suffix = self._normalize_name_suffix(
+                self.installer_state.get("name_suffix")
             )
-            if "COMMAND FAILED" in status_result:
-                return status_result
 
-            parsed_status = self._try_parse_json(status_result)
-            if not isinstance(parsed_status, dict):
-                return (
-                    "COMMAND FAILED: Unable to parse deployment status for "
-                    f"{deployment_name}."
+            validation_result = validate_infrastructure_provisioning(
+                resource_group=resource_group,
+                location=location,
+                admin_oid=admin_oid,
+                host_os=host_os,
+                deployment_name=deployment_name,
+                name_suffix=name_suffix,
+            )
+            if (
+                "COMMAND FAILED" in validation_result
+                or "COMMAND CANCELLED" in validation_result
+            ):
+                diagnostics = self._analyze_provisioning_failure(
+                    resource_group=resource_group,
+                    deployment_name=deployment_name,
+                    host_os=host_os,
+                    initial_failure=validation_result,
                 )
+                recovery = self._offer_preflight_recovery(
+                    diagnostics=diagnostics,
+                    resource_group=resource_group,
+                    location=location,
+                    host_os=host_os,
+                )
+                if recovery.action == "retry":
+                    continue
+                return recovery.message or validation_result
 
-            state = str(parsed_status.get("state", "Unknown"))
-            elapsed = self._format_elapsed(time.monotonic() - poll_started_at)
+            start_result = start_infrastructure_provisioning(
+                resource_group=resource_group,
+                location=location,
+                admin_oid=admin_oid,
+                host_os=host_os,
+                deployment_name=deployment_name,
+                name_suffix=name_suffix,
+            )
+            if (
+                "COMMAND FAILED" in start_result
+                or "COMMAND CANCELLED" in start_result
+            ):
+                diagnostics = self._analyze_provisioning_failure(
+                    resource_group=resource_group,
+                    deployment_name=deployment_name,
+                    host_os=host_os,
+                    initial_failure=start_result,
+                )
+                recovery = self._offer_preflight_recovery(
+                    diagnostics=diagnostics,
+                    resource_group=resource_group,
+                    location=location,
+                    host_os=host_os,
+                )
+                if recovery.action == "retry":
+                    continue
+                return recovery.message or start_result
 
-            if state == "Succeeded":
-                endpoint_result = get_group_deployment_endpoint(
+            poll_started_at = time.monotonic()
+
+            while True:
+                status_result = get_group_deployment_status(
                     resource_group=resource_group,
                     deployment_name=deployment_name,
                     host_os=host_os,
                 )
-                endpoint = endpoint_result.strip()
-                if (
-                    not endpoint
-                    or "COMMAND FAILED" in endpoint_result
-                    or "COMMAND CANCELLED" in endpoint_result
-                ):
-                    endpoint = "<endpoint unavailable>"
-                self.installer_state["sao_endpoint"] = (
-                    endpoint
-                    if endpoint.startswith("http")
-                    else f"https://{endpoint}"
-                    if endpoint != "<endpoint unavailable>"
-                    else endpoint
-                )
+                if "COMMAND FAILED" in status_result:
+                    return status_result
 
-                health_result = check_deployment_status(
-                    resource_group, host_os=host_os
-                )
-                if (
-                    "COMMAND FAILED" not in health_result
-                    and "COMMAND CANCELLED" not in health_result
-                ):
-                    self._update_state(
-                        "check_deployment_status",
-                        {"resource_group": resource_group},
-                        health_result,
+                parsed_status = self._try_parse_json(status_result)
+                if not isinstance(parsed_status, dict):
+                    return (
+                        "COMMAND FAILED: Unable to parse deployment status for "
+                        f"{deployment_name}."
                     )
-                    if self.installer_state["sao_endpoint"]:
-                        endpoint = self.installer_state["sao_endpoint"]
 
-                self._print_provisioning_handoff(
-                    endpoint=endpoint,
-                    admin_oid=admin_oid,
-                    health_result=health_result,
+                state = str(parsed_status.get("state", "Unknown"))
+                elapsed = self._format_elapsed(time.monotonic() - poll_started_at)
+
+                if state == "Succeeded":
+                    endpoint_result = get_group_deployment_endpoint(
+                        resource_group=resource_group,
+                        deployment_name=deployment_name,
+                        host_os=host_os,
+                    )
+                    endpoint = endpoint_result.strip()
+                    if (
+                        not endpoint
+                        or "COMMAND FAILED" in endpoint_result
+                        or "COMMAND CANCELLED" in endpoint_result
+                    ):
+                        endpoint = "<endpoint unavailable>"
+                    self.installer_state["sao_endpoint"] = (
+                        endpoint
+                        if endpoint.startswith("http")
+                        else f"https://{endpoint}"
+                        if endpoint != "<endpoint unavailable>"
+                        else endpoint
+                    )
+
+                    health_result = check_deployment_status(
+                        resource_group, host_os=host_os
+                    )
+                    if (
+                        "COMMAND FAILED" not in health_result
+                        and "COMMAND CANCELLED" not in health_result
+                    ):
+                        self._update_state(
+                            "check_deployment_status",
+                            {"resource_group": resource_group},
+                            health_result,
+                        )
+                        if self.installer_state["sao_endpoint"]:
+                            endpoint = self.installer_state["sao_endpoint"]
+
+                    self._print_provisioning_handoff(
+                        endpoint=endpoint,
+                        admin_oid=admin_oid,
+                        health_result=health_result,
+                    )
+
+                    result = {
+                        "deployment_name": deployment_name,
+                        "provisioning_state": state,
+                        "elapsed": elapsed,
+                        "resource_group": resource_group,
+                        "endpoint": endpoint,
+                        "admin_oid": admin_oid,
+                        "health": health_result,
+                    }
+                    if name_suffix:
+                        result["name_suffix"] = name_suffix
+                    return json.dumps(result, indent=2)
+
+                if state in {"Failed", "Canceled"}:
+                    diagnostics = self._analyze_provisioning_failure(
+                        resource_group=resource_group,
+                        deployment_name=deployment_name,
+                        host_os=host_os,
+                        initial_failure=status_result,
+                    )
+                    return self._format_provisioning_failure_message(
+                        deployment_name=deployment_name,
+                        context_label=(
+                            "Azure deployment failure"
+                            f" ({state} at {parsed_status.get('timestamp', 'unknown time')})"
+                        ),
+                        diagnostics=diagnostics,
+                    )
+
+                stage_message = self._infer_provisioning_stage(
+                    resource_group, host_os
+                )
+                print(
+                    "\nDeployment is still running "
+                    f"({elapsed} elapsed). {stage_message}"
                 )
 
-                result = {
-                    "deployment_name": deployment_name,
-                    "provisioning_state": state,
-                    "elapsed": elapsed,
-                    "resource_group": resource_group,
-                    "endpoint": endpoint,
-                    "admin_oid": admin_oid,
-                    "health": health_result,
-                }
-                return json.dumps(result, indent=2)
-
-            if state in {"Failed", "Canceled"}:
-                timestamp = parsed_status.get("timestamp", "unknown time")
-                return (
-                    "COMMAND FAILED: Azure deployment "
-                    f"{deployment_name} ended with state {state} at {timestamp}."
+                user_input = input(
+                    "\nDuring provisioning, press Enter to keep waiting, "
+                    "type 'status' to refresh now, or ask a question: "
                 )
+                normalized_input = user_input.strip()
+                if not normalized_input:
+                    time.sleep(POLL_INTERVAL_SECONDS)
+                    continue
+                if normalized_input.lower() == "status":
+                    continue
 
-            stage_message = self._infer_provisioning_stage(resource_group, host_os)
-            print(
-                "\nDeployment is still running "
-                f"({elapsed} elapsed). {stage_message}"
-            )
-
-            user_input = input(
-                "\nDuring provisioning, press Enter to keep waiting, "
-                "type 'status' to refresh now, or ask a question: "
-            )
-            normalized_input = user_input.strip()
-            if not normalized_input:
+                self._answer_polling_question(
+                    normalized_input,
+                    {
+                        "deployment_name": deployment_name,
+                        "resource_group": resource_group,
+                        "status": parsed_status,
+                        "elapsed": elapsed,
+                        "admin_oid": admin_oid,
+                        "name_suffix": name_suffix,
+                    },
+                )
                 time.sleep(POLL_INTERVAL_SECONDS)
-                continue
-            if normalized_input.lower() == "status":
-                continue
 
-            self._answer_polling_question(
-                normalized_input,
-                {
-                    "deployment_name": deployment_name,
-                    "resource_group": resource_group,
-                    "status": parsed_status,
-                    "elapsed": elapsed,
-                    "admin_oid": admin_oid,
-                },
-            )
-            time.sleep(POLL_INTERVAL_SECONDS)
+        return (
+            "COMMAND FAILED: Provisioning hit repeated name-collision recovery "
+            "attempts. Cleanup the test environment or retry with a fresh "
+            "resource group."
+        )
 
     def _execute_phase(self, tool_blocks: list[Any]) -> str:
         """Explain, approve, execute, and summarize a single phase."""
@@ -1058,7 +1612,7 @@ class InstallerAgent:
             )
 
         print(f"\n{phase_detail['title']}")
-        print(f"Here's what I'm about to do and why: {phase_detail['intro']}")
+        print(self._phase_intro_text(phase))
         if preview_commands:
             print("Planned Azure CLI commands:")
             for command in preview_commands:
@@ -1204,6 +1758,10 @@ class InstallerAgent:
                 args["location"],
                 args["admin_oid"],
                 host_os=host_os,
+                name_suffix=(
+                    args.get("name_suffix")
+                    or self.installer_state.get("name_suffix")
+                ),
             ),
             "check_deployment_status": lambda: check_deployment_status(
                 args["resource_group"], host_os=host_os
@@ -1251,6 +1809,7 @@ class InstallerAgent:
             self.installer_state["resource_group"] = None
             self.installer_state["location"] = None
             self.installer_state["deployment_name"] = None
+            self.installer_state["name_suffix"] = ""
             self.installer_state["sao_endpoint"] = None
 
         elif tool_name == "check_deployment_status":
