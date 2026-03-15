@@ -16,4 +16,5 @@ COPY bicep/ /app/bicep/
 COPY system_prompt.md /app/system_prompt.md
 
 WORKDIR /app
+ENV HOST_OS=windows
 ENTRYPOINT ["python", "src/main.py"]
