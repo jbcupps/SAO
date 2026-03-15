@@ -1,5 +1,13 @@
 # SAO - Claude Code Project Guide
 
+DOCUMENT MAINTENANCE RULE (enforced on every run):
+After ANY change to code, README, or docs:
+
+Append a dated entry to the Key Decisions Log in this file.
+Open SAO_Orion_Architecture_Analysis_v2.docx and add/update the "Implementation Status - March 2026" subsection under Section 11 with a bullet mapping the change to the original spec.
+If the change affects ethical runtime verification, add a matching note to Toward a Decentralized Trust Framework.pdf (Section "Runtime Ethical Enforcement").
+Commit these updates with message "docs: sync architecture documents after [brief description]".
+
 > This file is the single source of truth for all Claude Code work on SAO. Any architectural decision, API change, or feature addition must be reflected here before implementation.
 
 ## Project Overview
@@ -277,6 +285,7 @@ WS     /ws/agent/:agent_id                  # WebSocket for real-time events
 | LLM engine | Claude (Anthropic API) for MVP. BYOK for additional providers later. |
 | Test tenant | `your-tenant.onmicrosoft.com` |
 | 2026-03-15 | Hygiene sprint completed; README and installer narrative aligned with agentic vision |
+| 2026-03-15 | Hygiene sprint completed (Phases 2, 3, 5 finished). README now tells the correct agentic installer story. |
 
 ---
 
