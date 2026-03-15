@@ -47,7 +47,8 @@ module containerApp 'modules/container-app.bicep' = {
     appName: 'sao-app'
     envName: '${baseName}-env'
     saoImage: resolvedSaoImage
-    databaseUrl: postgres.outputs.connectionString
+    pgServerFqdn: postgres.outputs.serverFqdn
+    pgAdminPassword: pgAdminPassword
     keyVaultUri: keyVault.outputs.vaultUri
     adminOid: adminOid
   }

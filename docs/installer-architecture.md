@@ -56,6 +56,8 @@ The installer is a multi-turn conversation between the admin and a Claude-powere
 9. Server streams response to frontend via WebSocket
 10. Frontend renders response in chat terminal
 
+The browser shell is local to the operator, but the installer conversation and tool results are sent to Anthropic for model execution. If an operator saves a transcript to a local file, that file remains local until they explicitly share it elsewhere.
+
 ### Tool Execution Visibility
 
 When the agent executes a tool:
@@ -185,15 +187,18 @@ Resource Group
 │   └── Centralized logging for all resources
 ├── Container Apps Environment
 │   └── SAO Container App
-│       ├── Image: ghcr.io/jbcupps/sao:latest
+│       ├── Image: ghcr.io/jbcupps/sao:<tag> (built from docker/Dockerfile)
 │       ├── Port: 3100 (external ingress)
 │       ├── Min replicas: 1, Max: 3
-│       └── Env: DATABASE_URL, ENTRA_TENANT_ID, ENTRA_CLIENT_ID
+│       ├── DATABASE_URL via Container Apps secretRef
+│       └── Startup, readiness, and liveness probes on /api/health
 └── PostgreSQL Flexible Server (v16)
     ├── SKU: B_Standard_B1ms (burstable)
     ├── Storage: 32 GB
     └── Database: sao
 ```
+
+The deployment is only considered ready after ARM succeeds, the latest Container App revision is healthy, and `/api/health` returns a healthy response.
 
 ## Error Recovery
 
@@ -202,7 +207,7 @@ The installer is designed for graceful error handling:
 | Failure | Recovery |
 |---------|----------|
 | Entra auth fails | Agent explains the error, suggests checking tenant ID and app config |
-| Database unreachable | Agent checks DATABASE_URL, suggests Docker network troubleshooting |
+| Database unreachable | Agent checks the secret-backed `DATABASE_URL`, startup retry window, revision health, replicas, and Container Apps logs |
 | Graph API permission denied | Agent walks admin through adding required API permissions |
 | Vault operation fails | Agent checks encryption state, suggests re-initialization |
 | Container restart during install | Agent loads state from PostgreSQL, resumes from last step |

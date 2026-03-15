@@ -92,6 +92,11 @@ class AzureToolTests(unittest.TestCase):
                 ["containerapp", "logs", "show", "--name", "sao-app"]
             )
         )
+        self.assertTrue(
+            azure.is_safe_read_only_az_args(
+                ["containerapp", "replica", "list", "--name", "sao-app"]
+            )
+        )
         self.assertFalse(
             azure.is_safe_read_only_az_args(
                 ["group", "create", "--name", "sao-rg"]
@@ -331,12 +336,14 @@ class AzureToolTests(unittest.TestCase):
             "Microsoft.App/containerApps",
         )
 
-    def test_collect_container_app_diagnostics_reads_revisions_and_logs(self):
+    def test_collect_container_app_diagnostics_reads_revisions_replicas_and_logs(self):
         app_payload = (
-            '{"properties":{"provisioningState":"Failed","template":{"containers":[{"image":"ghcr.io/jbcupps/sao:latest"}]}}}'
+            '{"properties":{"provisioningState":"Failed","latestRevisionName":"sao-app--rev1","template":{"containers":[{"image":"ghcr.io/jbcupps/sao:latest"}]}}}'
         )
         revisions_payload = '[{"name":"sao-app--rev1"}]'
-        logs_payload = '{"messages":["pull failed"]}'
+        replicas_payload = '[{"name":"replica-1","properties":{"runningState":"NotRunning"}}]'
+        app_logs_payload = '[{"Log":"panic: startup failed"}]'
+        system_logs_payload = '[{"Log":"pull failed"}]'
 
         with patch(
             "tools.azure.get_container_app", return_value=app_payload
@@ -344,8 +351,14 @@ class AzureToolTests(unittest.TestCase):
             "tools.azure.list_container_app_revisions",
             return_value=revisions_payload,
         ), patch(
+            "tools.azure.list_container_app_replicas",
+            return_value=replicas_payload,
+        ) as replicas_mock, patch(
+            "tools.azure.get_container_app_logs",
+            return_value=app_logs_payload,
+        ) as app_logs_mock, patch(
             "tools.azure.get_container_app_system_logs",
-            return_value=logs_payload,
+            return_value=system_logs_payload,
         ) as logs_mock:
             diagnostics = azure.collect_container_app_diagnostics(
                 resource_group="sao-rg",
@@ -355,7 +368,22 @@ class AzureToolTests(unittest.TestCase):
 
         self.assertEqual(diagnostics["latest_revision"], "sao-app--rev1")
         self.assertEqual(diagnostics["app"]["properties"]["provisioningState"], "Failed")
-        self.assertEqual(diagnostics["system_logs"]["messages"][0], "pull failed")
+        self.assertEqual(diagnostics["replicas"][0]["name"], "replica-1")
+        self.assertEqual(diagnostics["app_logs"][0]["Log"], "panic: startup failed")
+        self.assertEqual(diagnostics["system_logs"][0]["Log"], "pull failed")
+        replicas_mock.assert_called_once_with(
+            resource_group="sao-rg",
+            app_name="sao-app",
+            revision="sao-app--rev1",
+            host_os="windows",
+        )
+        app_logs_mock.assert_called_once_with(
+            resource_group="sao-rg",
+            app_name="sao-app",
+            tail=50,
+            revision="sao-app--rev1",
+            host_os="windows",
+        )
         logs_mock.assert_called_once_with(
             resource_group="sao-rg",
             app_name="sao-app",
@@ -363,6 +391,69 @@ class AzureToolTests(unittest.TestCase):
             revision="sao-app--rev1",
             host_os="windows",
         )
+
+    def test_check_deployment_status_reports_failed_runtime(self):
+        diagnostics = {
+            "app": {
+                "properties": {
+                    "configuration": {
+                        "ingress": {"fqdn": "sao.example.com"}
+                    }
+                }
+            },
+            "latest_revision": "sao-app--rev1",
+            "revisions": [
+                {
+                    "name": "sao-app--rev1",
+                    "properties": {
+                        "healthState": "Unhealthy",
+                        "runningState": "Failed",
+                        "runningStateDetails": "Container crashing: sao",
+                    },
+                }
+            ],
+            "replicas": [
+                {
+                    "name": "replica-1",
+                    "properties": {
+                        "runningState": "NotRunning",
+                        "runningStateDetails": "CrashLoopBackOff",
+                        "containers": [
+                            {
+                                "ready": False,
+                                "restartCount": 4,
+                                "runningState": "Waiting",
+                                "runningStateDetails": "CrashLoopBackOff",
+                            }
+                        ],
+                    },
+                }
+            ],
+            "app_logs": [
+                {
+                    "Log": "sqlx was built without TLS support enabled"
+                }
+            ],
+            "system_logs": [{"Log": "Container terminated with exit code 101"}],
+            "collection_errors": [],
+        }
+
+        with patch(
+            "tools.azure.collect_container_app_diagnostics",
+            return_value=diagnostics,
+        ), patch(
+            "tools.azure._run",
+            return_value="COMMAND FAILED (exit 1): timeout",
+        ):
+            status = azure.check_deployment_status(
+                resource_group="sao-rg", host_os="windows"
+            )
+
+        self.assertIn("Endpoint: https://sao.example.com", status)
+        self.assertIn("Ready: false", status)
+        self.assertIn("Runtime state: failed", status)
+        self.assertIn("Replica restarts: 4", status)
+        self.assertIn("Application logs:", status)
 
 
 if __name__ == "__main__":

@@ -26,6 +26,7 @@ _READ_ONLY_PREFIXES_2 = {
 _READ_ONLY_PREFIXES_3 = {
     ("ad", "signed-in-user", "show"),
     ("containerapp", "logs", "show"),
+    ("containerapp", "replica", "list"),
     ("containerapp", "revision", "list"),
     ("deployment", "group", "show"),
     ("role", "assignment", "list"),
@@ -720,6 +721,165 @@ def get_container_app_system_logs(
     return _run(args, host_os=host_os)
 
 
+def get_container_app_logs(
+    resource_group: str,
+    app_name: str = DEFAULT_CONTAINER_APP_NAME,
+    tail: int = 50,
+    revision: str | None = None,
+    host_os: str | None = None,
+) -> str:
+    """Read recent application logs for the Container App."""
+    args = [
+        "containerapp",
+        "logs",
+        "show",
+        "--resource-group",
+        resource_group,
+        "--name",
+        app_name,
+        "--tail",
+        str(tail),
+        "--output",
+        "json",
+    ]
+    normalized_revision = (revision or "").strip()
+    if normalized_revision:
+        args.extend(["--revision", normalized_revision])
+    return _run(args, host_os=host_os)
+
+
+def list_container_app_replicas(
+    resource_group: str,
+    app_name: str = DEFAULT_CONTAINER_APP_NAME,
+    revision: str | None = None,
+    host_os: str | None = None,
+) -> str:
+    """List replicas for the Container App."""
+    args = [
+        "containerapp",
+        "replica",
+        "list",
+        "--resource-group",
+        resource_group,
+        "--name",
+        app_name,
+        "--output",
+        "json",
+    ]
+    normalized_revision = (revision or "").strip()
+    if normalized_revision:
+        args.extend(["--revision", normalized_revision])
+    return _run(args, host_os=host_os)
+
+
+def _select_latest_revision_name(
+    app_payload: dict[str, Any] | list[Any] | None,
+    revisions_payload: dict[str, Any] | list[Any] | None,
+) -> str:
+    """Choose the best latest-revision hint from app state or revision list."""
+    if isinstance(app_payload, dict):
+        properties = app_payload.get("properties", {})
+        if isinstance(properties, dict):
+            for key in ("latestRevisionName", "latestReadyRevisionName"):
+                candidate = str(properties.get(key) or "").strip()
+                if candidate:
+                    return candidate
+
+    if isinstance(revisions_payload, list):
+        for revision in revisions_payload:
+            if not isinstance(revision, dict):
+                continue
+            candidate = str(revision.get("name") or "").strip()
+            if candidate:
+                return candidate
+
+    return ""
+
+
+def _parse_log_excerpt(logs_payload: Any, limit: int = 5) -> list[str]:
+    """Normalize assorted log payloads into a short readable excerpt."""
+    if isinstance(logs_payload, str):
+        return [line.strip() for line in logs_payload.splitlines() if line.strip()][:limit]
+
+    messages: list[str] = []
+    if isinstance(logs_payload, list):
+        for entry in logs_payload:
+            if not isinstance(entry, dict):
+                normalized = str(entry).strip()
+                if normalized:
+                    messages.append(normalized)
+                continue
+            message = str(entry.get("Log") or entry.get("Msg") or "").strip()
+            if message:
+                messages.append(message)
+    elif isinstance(logs_payload, dict):
+        messages.extend(
+            str(value).strip()
+            for key, value in logs_payload.items()
+            if key.lower().endswith("message") or key in {"messages", "Log", "Msg"}
+        )
+
+    return [message for message in messages if message][:limit]
+
+
+def _find_revision_summary(
+    revisions_payload: list[Any] | None,
+    revision_name: str,
+) -> dict[str, Any]:
+    """Return the latest revision summary when available."""
+    if not isinstance(revisions_payload, list):
+        return {}
+
+    normalized_revision_name = revision_name.strip()
+    fallback: dict[str, Any] = {}
+    for revision in revisions_payload:
+        if not isinstance(revision, dict):
+            continue
+        if not fallback:
+            fallback = revision
+        if str(revision.get("name") or "").strip() == normalized_revision_name:
+            return revision
+    return fallback
+
+
+def _find_replica_summary(replicas_payload: list[Any] | None) -> dict[str, Any]:
+    """Return a compact summary of the most recent replica state."""
+    if not isinstance(replicas_payload, list) or not replicas_payload:
+        return {}
+
+    replica = replicas_payload[0]
+    if not isinstance(replica, dict):
+        return {}
+
+    properties = replica.get("properties", {})
+    if not isinstance(properties, dict):
+        properties = {}
+
+    containers = properties.get("containers", [])
+    if not isinstance(containers, list):
+        containers = []
+
+    first_container = containers[0] if containers else {}
+    if not isinstance(first_container, dict):
+        first_container = {}
+
+    return {
+        "name": str(replica.get("name") or "").strip(),
+        "runningState": str(properties.get("runningState") or "").strip(),
+        "runningStateDetails": str(
+            properties.get("runningStateDetails") or ""
+        ).strip(),
+        "containerReady": bool(first_container.get("ready")),
+        "containerRestartCount": int(first_container.get("restartCount") or 0),
+        "containerRunningState": str(
+            first_container.get("runningState") or ""
+        ).strip(),
+        "containerRunningStateDetails": str(
+            first_container.get("runningStateDetails") or ""
+        ).strip(),
+    }
+
+
 def collect_group_deployment_diagnostics(
     resource_group: str,
     deployment_name: str = DEFAULT_DEPLOYMENT_NAME,
@@ -809,7 +969,7 @@ def collect_container_app_diagnostics(
     app_name: str = DEFAULT_CONTAINER_APP_NAME,
     host_os: str | None = None,
 ) -> dict[str, Any]:
-    """Gather Container App state, revisions, and system logs when available."""
+    """Gather Container App state, revisions, replicas, and logs when available."""
     app_result = get_container_app(
         resource_group=resource_group,
         app_name=app_name,
@@ -823,18 +983,38 @@ def collect_container_app_diagnostics(
         host_os=host_os,
     )
     revisions_payload = _parse_json_output(revisions_result)
-    revision_name = ""
-    if isinstance(revisions_payload, list):
-        for revision in revisions_payload:
-            if not isinstance(revision, dict):
-                continue
-            candidate = str(revision.get("name") or "").strip()
-            if candidate:
-                revision_name = candidate
-                break
+    revision_name = _select_latest_revision_name(app_payload, revisions_payload)
 
+    replicas_payload: Any = None
+    app_logs: Any = None
     system_logs: Any = None
+    collection_errors: list[str] = []
+
     if revision_name:
+        replicas_result = list_container_app_replicas(
+            resource_group=resource_group,
+            app_name=app_name,
+            revision=revision_name,
+            host_os=host_os,
+        )
+        replicas_payload = _parse_json_output(replicas_result)
+        if replicas_payload is None and "COMMAND FAILED" in replicas_result:
+            collection_errors.append(replicas_result)
+
+        app_logs_result = get_container_app_logs(
+            resource_group=resource_group,
+            app_name=app_name,
+            tail=50,
+            revision=revision_name,
+            host_os=host_os,
+        )
+        app_logs = _parse_json_output(app_logs_result)
+        if app_logs is None:
+            if "COMMAND FAILED" in app_logs_result:
+                collection_errors.append(app_logs_result)
+            elif app_logs_result.strip():
+                app_logs = app_logs_result.strip()
+
         logs_result = get_container_app_system_logs(
             resource_group=resource_group,
             app_name=app_name,
@@ -843,14 +1023,25 @@ def collect_container_app_diagnostics(
             host_os=host_os,
         )
         system_logs = _parse_json_output(logs_result)
-        if system_logs is None and "COMMAND FAILED" not in logs_result:
-            system_logs = logs_result.strip()
+        if system_logs is None:
+            if "COMMAND FAILED" in logs_result:
+                collection_errors.append(logs_result)
+            elif logs_result.strip():
+                system_logs = logs_result.strip()
+
+    if "COMMAND FAILED" in app_result:
+        collection_errors.append(app_result)
+    if "COMMAND FAILED" in revisions_result:
+        collection_errors.append(revisions_result)
 
     return {
         "app": app_payload,
         "revisions": revisions_payload if isinstance(revisions_payload, list) else [],
         "latest_revision": revision_name or None,
+        "replicas": replicas_payload if isinstance(replicas_payload, list) else [],
+        "app_logs": app_logs,
         "system_logs": system_logs,
+        "collection_errors": collection_errors[:4],
     }
 
 
@@ -898,32 +1089,161 @@ def purge_deleted_key_vault(
 def check_deployment_status(
     resource_group: str, host_os: str | None = None
 ) -> str:
-    """Check if SAO container is running."""
-    fqdn_result = _run(
-        [
-            "containerapp",
-            "show",
-            "--name",
-            DEFAULT_CONTAINER_APP_NAME,
-            "--resource-group",
-            resource_group,
-            "--query",
-            "properties.configuration.ingress.fqdn",
-            "-o",
-            "tsv",
-        ],
-        parse_json=False,
+    """Check whether the deployed Container App is actually ready to serve."""
+    diagnostics = collect_container_app_diagnostics(
+        resource_group=resource_group,
+        app_name=DEFAULT_CONTAINER_APP_NAME,
         host_os=host_os,
     )
-    if "COMMAND FAILED" in fqdn_result or "COMMAND CANCELLED" in fqdn_result:
-        return fqdn_result
+    app_payload = diagnostics.get("app")
+    app_properties = app_payload.get("properties", {}) if isinstance(app_payload, dict) else {}
+    if not isinstance(app_properties, dict):
+        app_properties = {}
 
+    ingress = app_properties.get("configuration", {})
+    if isinstance(ingress, dict):
+        ingress = ingress.get("ingress", {})
+    else:
+        ingress = {}
+    if not isinstance(ingress, dict):
+        ingress = {}
+
+    fqdn = str(ingress.get("fqdn") or "").strip()
+    if not fqdn:
+        return "COMMAND FAILED: Could not resolve the SAO Container App ingress FQDN."
+
+    endpoint = f"https://{fqdn}"
     health_result = _run(
-        ["rest", "--method", "GET", "--url", f"https://{fqdn_result}/api/health"],
+        ["rest", "--method", "GET", "--url", f"{endpoint}/api/health"],
         parse_json=True,
         host_os=host_os,
     )
-    return f"Endpoint: https://{fqdn_result}\nHealth: {health_result}"
+    health_payload = _parse_json_output(health_result)
+    health_status = ""
+    if isinstance(health_payload, dict):
+        health_status = str(health_payload.get("status") or "").strip().lower()
+
+    latest_revision = str(diagnostics.get("latest_revision") or "").strip()
+    revision_summary = _find_revision_summary(
+        diagnostics.get("revisions"), latest_revision
+    )
+    revision_properties = (
+        revision_summary.get("properties", {})
+        if isinstance(revision_summary, dict)
+        else {}
+    )
+    if not isinstance(revision_properties, dict):
+        revision_properties = {}
+
+    revision_health = str(revision_properties.get("healthState") or "").strip()
+    revision_state = str(revision_properties.get("runningState") or "").strip()
+    revision_state_details = str(
+        revision_properties.get("runningStateDetails")
+        or revision_properties.get("provisioningError")
+        or ""
+    ).strip()
+
+    replica_summary = _find_replica_summary(diagnostics.get("replicas"))
+    replica_details = " | ".join(
+        part
+        for part in [
+            str(replica_summary.get("runningStateDetails") or "").strip(),
+            str(replica_summary.get("containerRunningStateDetails") or "").strip(),
+        ]
+        if part
+    )
+    lowered_runtime_text = " ".join(
+        part.lower()
+        for part in [
+            revision_health,
+            revision_state,
+            revision_state_details,
+            replica_details,
+            " ".join(_parse_log_excerpt(diagnostics.get("app_logs"), limit=3)),
+            " ".join(_parse_log_excerpt(diagnostics.get("system_logs"), limit=3)),
+        ]
+        if part
+    )
+
+    ready = (
+        health_status == "ok"
+        and revision_health.lower() not in {"unhealthy"}
+        and revision_state.lower() not in {"failed"}
+        and (
+            not replica_summary
+            or bool(replica_summary.get("containerReady"))
+        )
+    )
+    runtime_state = "warming"
+    if ready:
+        runtime_state = "ready"
+    elif any(
+        token in lowered_runtime_text
+        for token in (
+            "crashloopbackoff",
+            "container crashing",
+            "persistent failure",
+            "exit code",
+            "panicked",
+            "terminated",
+            "unhealthy",
+            "failed",
+        )
+    ):
+        runtime_state = "failed"
+
+    lines = [
+        f"Endpoint: {endpoint}",
+        f"Ready: {'true' if ready else 'false'}",
+        f"Runtime state: {runtime_state}",
+    ]
+    if latest_revision:
+        lines.append(f"Revision: {latest_revision}")
+    if revision_health:
+        lines.append(f"Revision health: {revision_health}")
+    if revision_state:
+        lines.append(f"Revision state: {revision_state}")
+    if revision_state_details:
+        lines.append(f"Revision details: {revision_state_details}")
+    if replica_summary:
+        lines.append(
+            "Replica state: "
+            + " / ".join(
+                part
+                for part in [
+                    str(replica_summary.get("runningState") or "").strip(),
+                    str(replica_summary.get("containerRunningState") or "").strip(),
+                ]
+                if part
+            )
+        )
+        if replica_details:
+            lines.append(f"Replica details: {replica_details}")
+        lines.append(
+            f"Replica restarts: {replica_summary.get('containerRestartCount', 0)}"
+        )
+
+    if health_payload is not None:
+        lines.append(f"Health: {json.dumps(health_payload, indent=2)}")
+    else:
+        lines.append(f"Health: {health_result.strip()}")
+
+    app_log_excerpt = _parse_log_excerpt(diagnostics.get("app_logs"), limit=4)
+    if app_log_excerpt:
+        lines.append("Application logs:")
+        lines.extend(f"- {line}" for line in app_log_excerpt)
+
+    system_log_excerpt = _parse_log_excerpt(diagnostics.get("system_logs"), limit=4)
+    if system_log_excerpt:
+        lines.append("System logs:")
+        lines.extend(f"- {line}" for line in system_log_excerpt)
+
+    collection_errors = diagnostics.get("collection_errors", [])
+    if isinstance(collection_errors, list) and collection_errors:
+        lines.append("Diagnostics warnings:")
+        lines.extend(f"- {warning}" for warning in collection_errors[:2])
+
+    return "\n".join(lines)
 
 
 def run_az_command(args: list[str], host_os: str | None = None) -> str:

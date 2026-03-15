@@ -39,13 +39,13 @@ Local notes:
 
 SAO is designed as an enterprise control plane for identity-bound agent operations, secure key custody, and governed orchestration. Its defining experience is the installer itself: instead of handing an operator a checklist, SAO boots into a managed conversation that provisions the platform with the same controls it will later enforce.
 
-The container image for that experience is `ghcr.io/jbcupps/sao:installer`. It is intended to launch the first-run bootstrap inside a governed runtime, with the installer agent guiding the administrator through environment checks, identity confirmation, configuration capture, and validation of the platform state.
+The production Azure application image is `ghcr.io/jbcupps/sao:<tag>`, built from `docker/Dockerfile`. That is the image contract used by Azure Container Apps for SAO itself, including the frontend bundle, static assets, `/api/health`, and the runtime `DATABASE_URL` secret reference. A separate installer-only container can still be built from `installer/Dockerfile` when a standalone bootstrap environment is needed, but it is not the production app image path.
 
 The bootstrap model is Entra-first:
 
 - The first administrator authenticates through Microsoft Entra ID using OIDC.
 - SAO records the authenticated Entra Object ID as the founding admin identity.
-- No generated bootstrap passwords, seed users, or disposable credentials are created.
+- SAO does not generate an operator-facing SAO bootstrap password; Azure still provisions a PostgreSQL admin credential for the managed database and stores the runtime connection string in Container Apps secrets.
 - Post-authentication configuration is completed through a conversational provisioning flow instead of a static wizard.
 
 That provisioning flow is meant to be transparent and controlled:
@@ -54,6 +54,7 @@ That provisioning flow is meant to be transparent and controlled:
 - It can validate or help gather required tenant and application details.
 - It can resume from partial progress instead of forcing a restart.
 - It keeps the operator in a governed loop where identity, auditability, and orchestration begin together.
+- Installer chat turns and tool results are sent to Anthropic as part of the runtime; manually saved local transcript files remain local unless you copy or share them.
 
 In enterprise demos, SAO should read as a control plane that installs itself through policy-aware dialogue: identity first, credentials never fabricated, and system state established through a traceable conversation.
 

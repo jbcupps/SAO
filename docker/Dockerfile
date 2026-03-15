@@ -18,7 +18,8 @@ RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/li
 WORKDIR /app
 
 # Copy workspace files
-COPY Cargo.toml rust-toolchain.toml ./
+COPY .cargo/ .cargo/
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates/ crates/
 COPY migrations/ migrations/
 
@@ -47,7 +48,7 @@ EXPOSE 3100
 
 VOLUME ["/data/sao"]
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
     CMD curl -f http://localhost:3100/api/health || exit 1
 
 CMD ["sao-server"]

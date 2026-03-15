@@ -29,7 +29,7 @@ tower-http = { version = "0.5", features = ["cors", "trace", "fs"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 futures-util = "0.3"
 dirs = "5.0"
-sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "chrono", "uuid", "migrate", "json"] }
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "chrono", "uuid", "migrate", "json"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 aes-gcm-siv = "0.11"
 argon2 = "0.5"

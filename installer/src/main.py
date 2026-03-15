@@ -2,6 +2,8 @@
 """SAO Installer — Entry point."""
 
 import argparse
+import getpass
+import os
 import sys
 
 from agent import InstallerAgent
@@ -20,6 +22,12 @@ PROVIDERS = {
     "4": ("google", "Google"),
     "5": ("custom", "Custom endpoint"),
 }
+
+PROVIDER_VISIBILITY_NOTICE = (
+    "The installer runs locally, but the conversation and tool results are sent "
+    "to Anthropic so the agent can operate. Local transcript files stay on this "
+    "machine unless you choose to share them."
+)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -47,6 +55,8 @@ def collect_api_key() -> tuple[str, str]:
     """Collect LLM provider and API key. Returns (provider, api_key)."""
     print(BANNER)
     print("To guide you through this installation, I need an LLM API key.\n")
+    print(PROVIDER_VISIBILITY_NOTICE)
+    print()
     print("Provider options:")
     for k, (_, name) in PROVIDERS.items():
         suffix = "" if k == "1" else " — coming soon"
@@ -65,8 +75,21 @@ def collect_api_key() -> tuple[str, str]:
             continue
         break
 
+    env_api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if env_api_key:
+        if not env_api_key.startswith("sk-ant-"):
+            raise ValueError(
+                "ANTHROPIC_API_KEY is set but does not start with 'sk-ant-'."
+            )
+        print("Using Anthropic API key from ANTHROPIC_API_KEY.")
+        return "claude", env_api_key
+
     while True:
-        api_key = input("Enter your Anthropic API key: ").strip()
+        try:
+            api_key = getpass.getpass("Enter your Anthropic API key: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            raise
         if not api_key.startswith("sk-ant-"):
             print(
                 "That doesn't look like an Anthropic API key. "
@@ -95,7 +118,11 @@ def main(argv: list[str] | None = None):
             sys.exit(1)
         return
 
-    provider, api_key = collect_api_key()
+    try:
+        provider, api_key = collect_api_key()
+    except ValueError as exc:
+        print(f"\n{exc}")
+        sys.exit(1)
 
     agent = InstallerAgent(provider=provider, api_key=api_key)
 

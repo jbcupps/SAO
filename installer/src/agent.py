@@ -752,6 +752,10 @@ class InstallerAgent:
             parsed = self._try_parse_json(text)
             if parsed is not None and parsed != text:
                 return self._extract_error_messages(parsed)
+            if "\n" in text:
+                return self._dedupe_lines(
+                    [line.strip() for line in text.splitlines() if line.strip()]
+                )
             return [text]
 
         if isinstance(payload, list):
@@ -1149,6 +1153,35 @@ class InstallerAgent:
                 ),
                 format_az_command(
                     [
+                        "containerapp",
+                        "revision",
+                        "list",
+                        "--name",
+                        "sao-app",
+                        "--resource-group",
+                        args["resource_group"],
+                        "--all",
+                        "--output",
+                        "json",
+                    ],
+                    host_os=host_os,
+                ),
+                format_az_command(
+                    [
+                        "containerapp",
+                        "replica",
+                        "list",
+                        "--name",
+                        "sao-app",
+                        "--resource-group",
+                        args["resource_group"],
+                        "--output",
+                        "json",
+                    ],
+                    host_os=host_os,
+                ),
+                format_az_command(
+                    [
                         "rest",
                         "--method",
                         "GET",
@@ -1224,7 +1257,11 @@ class InstallerAgent:
             if (
                 "containerapp" in failed_resource_type
                 or "container_image" in issue_type
-                or "containerapp_revision_failed" == issue_type
+                or issue_type
+                in {
+                    "containerapp_revision_failed",
+                    "containerapp_postgres_tls_mismatch",
+                }
             ):
                 preview_commands.extend(
                     [
@@ -1282,6 +1319,36 @@ class InstallerAgent:
                                 "--name",
                                 "sao-app",
                                 "--all",
+                                "--output",
+                                "json",
+                            ],
+                            host_os=host_os,
+                        ),
+                        format_az_command(
+                            [
+                                "containerapp",
+                                "replica",
+                                "list",
+                                "--resource-group",
+                                resource_group,
+                                "--name",
+                                "sao-app",
+                                "--output",
+                                "json",
+                            ],
+                            host_os=host_os,
+                        ),
+                        format_az_command(
+                            [
+                                "containerapp",
+                                "logs",
+                                "show",
+                                "--resource-group",
+                                resource_group,
+                                "--name",
+                                "sao-app",
+                                "--tail",
+                                "50",
                                 "--output",
                                 "json",
                             ],
@@ -1535,11 +1602,33 @@ class InstallerAgent:
         print("  2. Sign in with your Entra ID account.")
         print("  3. Let the SAO agent guide the remaining role configuration.")
         print(
-            "No passwords were created. Access is controlled entirely through "
-            "your organization's Entra ID."
+            "Browser access uses your organization's Entra ID. Azure also "
+            "created a PostgreSQL admin credential for the managed database, "
+            "and the runtime database connection is stored in Container Apps "
+            "secrets."
         )
         if health_summary:
             print(f"Health check: {health_summary}")
+
+    def _deployment_status_field(self, health_result: str, prefix: str) -> str:
+        """Read one prefixed status line from the deployment health summary."""
+        for line in health_result.splitlines():
+            if line.startswith(prefix):
+                return line[len(prefix) :].strip()
+        return ""
+
+    def _deployment_runtime_state(self, health_result: str) -> str:
+        """Return the summarized runtime state from check_deployment_status."""
+        return self._deployment_status_field(
+            health_result, "Runtime state: "
+        ).lower()
+
+    def _deployment_is_ready(self, health_result: str) -> bool:
+        """Return True when runtime verification says the app is ready."""
+        return (
+            self._deployment_status_field(health_result, "Ready: ").lower()
+            == "true"
+        )
 
     def _summarize_failed_operation(self, operation: dict[str, Any]) -> str:
         """Render one normalized ARM failure into a compact sentence."""
@@ -1701,24 +1790,115 @@ class InstallerAgent:
                 if image_reference:
                     break
 
-        logs = container_app_diagnostics.get("system_logs")
-        if isinstance(logs, str):
-            log_excerpt = [
-                line.strip() for line in logs.splitlines() if line.strip()
-            ][:5]
-        else:
-            log_excerpt = self._extract_error_messages(logs)[:5]
-
         revisions = container_app_diagnostics.get("revisions", [])
         revision_count = len(revisions) if isinstance(revisions, list) else 0
+        latest_revision_name = str(
+            container_app_diagnostics.get("latest_revision") or ""
+        ).strip()
+        latest_revision: dict[str, Any] = {}
+        if isinstance(revisions, list):
+            for revision in revisions:
+                if not isinstance(revision, dict):
+                    continue
+                if (
+                    latest_revision_name
+                    and str(revision.get("name") or "").strip()
+                    == latest_revision_name
+                ):
+                    latest_revision = revision
+                    break
+            if not latest_revision and revisions and isinstance(revisions[0], dict):
+                latest_revision = revisions[0]
+
+        latest_revision_properties = (
+            latest_revision.get("properties", {})
+            if isinstance(latest_revision, dict)
+            else {}
+        )
+        if not isinstance(latest_revision_properties, dict):
+            latest_revision_properties = {}
+
+        replicas = container_app_diagnostics.get("replicas", [])
+        latest_replica = (
+            replicas[0] if isinstance(replicas, list) and replicas else {}
+        )
+        latest_replica_properties = (
+            latest_replica.get("properties", {})
+            if isinstance(latest_replica, dict)
+            else {}
+        )
+        if not isinstance(latest_replica_properties, dict):
+            latest_replica_properties = {}
+        replica_containers = latest_replica_properties.get("containers", [])
+        if not isinstance(replica_containers, list):
+            replica_containers = []
+        first_replica_container = (
+            replica_containers[0] if replica_containers else {}
+        )
+        if not isinstance(first_replica_container, dict):
+            first_replica_container = {}
 
         return {
             "provisioning_state": app_properties.get("provisioningState"),
             "image": image_reference,
-            "latest_revision": container_app_diagnostics.get("latest_revision"),
+            "latest_revision": latest_revision_name
+            or container_app_diagnostics.get("latest_revision"),
             "revision_count": revision_count,
-            "system_logs": log_excerpt,
+            "revision_health": latest_revision_properties.get("healthState"),
+            "revision_state": latest_revision_properties.get("runningState"),
+            "revision_details": latest_revision_properties.get(
+                "runningStateDetails"
+            )
+            or latest_revision_properties.get("provisioningError"),
+            "replica_state": latest_replica_properties.get("runningState"),
+            "replica_details": latest_replica_properties.get(
+                "runningStateDetails"
+            )
+            or first_replica_container.get("runningStateDetails"),
+            "replica_restart_count": first_replica_container.get(
+                "restartCount"
+            ),
+            "app_logs": self._extract_error_messages(
+                container_app_diagnostics.get("app_logs")
+            )[:5],
+            "system_logs": self._extract_error_messages(
+                container_app_diagnostics.get("system_logs")
+            )[:5],
+            "collection_errors": self._extract_error_messages(
+                container_app_diagnostics.get("collection_errors")
+            )[:3],
         }
+
+    def _extract_container_app_evidence(
+        self, container_app_diagnostics: dict[str, Any] | None
+    ) -> list[str]:
+        """Pull high-signal runtime evidence out of Container App diagnostics."""
+        summary = self._summarize_container_app_diagnostics(
+            container_app_diagnostics
+        )
+        if not isinstance(summary, dict):
+            return []
+
+        evidence: list[str] = []
+        for key in (
+            "revision_health",
+            "revision_state",
+            "revision_details",
+            "replica_state",
+            "replica_details",
+        ):
+            value = str(summary.get(key) or "").strip()
+            if value:
+                evidence.append(value)
+
+        restart_count = summary.get("replica_restart_count")
+        if restart_count not in (None, ""):
+            evidence.append(f"Replica restart count: {restart_count}")
+
+        for key in ("app_logs", "system_logs", "collection_errors"):
+            evidence.extend(self._extract_error_messages(summary.get(key)))
+
+        return self._dedupe_lines(evidence)
 
     def _clear_last_failure_bundle(self) -> None:
         """Clear troubleshooting state after a successful recovery."""
@@ -1818,6 +1998,11 @@ class InstallerAgent:
             if should_check_container_app
             else None
         )
+        evidence_lines.extend(
+            self._extract_container_app_evidence(raw_container_app_diagnostics)
+        )
+        evidence_lines = self._dedupe_lines(evidence_lines)
+        combined_evidence = "\n".join(evidence_lines)
         container_app_summary = self._summarize_container_app_diagnostics(
             raw_container_app_diagnostics
         )
@@ -1896,6 +2081,11 @@ class InstallerAgent:
                 return (
                     "Make the GHCR package public in GitHub, or retry with an "
                     "alternate image reference that Azure can pull."
+                )
+            if issue_type == "containerapp_postgres_tls_mismatch":
+                return (
+                    "Rebuild and redeploy the SAO app image with SQLx TLS "
+                    "enabled, then retry with that image."
                 )
             return "Retry with an alternate image reference that Azure can pull."
         if action == "cleanup_resource_group":
@@ -2073,6 +2263,12 @@ class InstallerAgent:
                 "Recommended fix: set the GitHub Container Registry package "
                 f"backing {image_label} to Public, then retry the deployment."
             )
+        elif issue_type == "containerapp_postgres_tls_mismatch":
+            lines.append(
+                "Recommended fix: rebuild the SAO application image with SQLx "
+                "Tokio+Rustls TLS support enabled, publish it, and redeploy "
+                "that image."
+            )
 
         failed_resource = diagnostics.get("failed_resource") or {}
         resource_type = str(failed_resource.get("type") or "").strip()
@@ -2137,6 +2333,7 @@ class InstallerAgent:
         name_suffix = self._normalize_name_suffix(
             self.installer_state.get("name_suffix")
         )
+        runtime_check_started_at: float | None = None
 
         validation_result = validate_infrastructure_provisioning(
             resource_group=resource_group,
@@ -2230,10 +2427,9 @@ class InstallerAgent:
                 health_result = check_deployment_status(
                     resource_group, host_os=host_os
                 )
-                if (
-                    "COMMAND FAILED" not in health_result
-                    and "COMMAND CANCELLED" not in health_result
-                ):
+                if "COMMAND CANCELLED" in health_result:
+                    return health_result
+                if "COMMAND FAILED" not in health_result:
                     self._update_state(
                         "check_deployment_status",
                         {"resource_group": resource_group},
@@ -2242,27 +2438,85 @@ class InstallerAgent:
                     if self.installer_state["sao_endpoint"]:
                         endpoint = self.installer_state["sao_endpoint"]
 
-                self._clear_last_failure_bundle()
-                self._print_provisioning_handoff(
-                    endpoint=endpoint,
-                    admin_oid=admin_oid,
-                    health_result=health_result,
-                )
+                if self._deployment_is_ready(health_result):
+                    self._clear_last_failure_bundle()
+                    self._print_provisioning_handoff(
+                        endpoint=endpoint,
+                        admin_oid=admin_oid,
+                        health_result=health_result,
+                    )
 
-                result = {
-                    "deployment_name": deployment_name,
-                    "provisioning_state": state,
-                    "elapsed": elapsed,
-                    "resource_group": resource_group,
-                    "endpoint": endpoint,
-                    "admin_oid": admin_oid,
-                    "health": health_result,
-                }
-                if name_suffix:
-                    result["name_suffix"] = name_suffix
-                if image_reference:
-                    result["image_reference"] = image_reference
-                return json.dumps(result, indent=2)
+                    result = {
+                        "deployment_name": deployment_name,
+                        "provisioning_state": state,
+                        "elapsed": elapsed,
+                        "resource_group": resource_group,
+                        "endpoint": endpoint,
+                        "admin_oid": admin_oid,
+                        "health": health_result,
+                    }
+                    if name_suffix:
+                        result["name_suffix"] = name_suffix
+                    if image_reference:
+                        result["image_reference"] = image_reference
+                    return json.dumps(result, indent=2)
+
+                runtime_state = self._deployment_runtime_state(health_result)
+                if runtime_state == "failed":
+                    diagnostics = self._collect_failure_bundle(
+                        resource_group=resource_group,
+                        deployment_name=deployment_name,
+                        host_os=host_os,
+                        initial_failure=health_result,
+                    )
+                    return self._format_provisioning_failure_message(
+                        deployment_name=deployment_name,
+                        context_label=(
+                            "Azure runtime verification"
+                            " (ARM deployment succeeded but the app revision failed)"
+                        ),
+                        diagnostics=diagnostics,
+                    )
+
+                runtime_check_started_at = (
+                    runtime_check_started_at or time.monotonic()
+                )
+                runtime_elapsed = self._format_elapsed(
+                    time.monotonic() - runtime_check_started_at
+                )
+                print(
+                    "\nAzure finished provisioning the resources, but the SAO "
+                    "application is still warming up "
+                    f"({runtime_elapsed} runtime verification elapsed)."
+                )
+                print(health_result)
+
+                user_input = input(
+                    "\nDuring provisioning, press Enter to keep waiting, "
+                    "type 'status' to refresh now, or ask a question: "
+                )
+                normalized_input = user_input.strip()
+                if not normalized_input:
+                    time.sleep(POLL_INTERVAL_SECONDS)
+                    continue
+                if normalized_input.lower() == "status":
+                    continue
+
+                self._answer_polling_question(
+                    normalized_input,
+                    {
+                        "deployment_name": deployment_name,
+                        "resource_group": resource_group,
+                        "status": parsed_status,
+                        "runtime_health": health_result,
+                        "elapsed": elapsed,
+                        "admin_oid": admin_oid,
+                        "name_suffix": name_suffix,
+                        "image_reference": image_reference,
+                    },
+                )
+                time.sleep(POLL_INTERVAL_SECONDS)
+                continue
 
             if state in {"Failed", "Canceled"}:
                 diagnostics = self._collect_failure_bundle(

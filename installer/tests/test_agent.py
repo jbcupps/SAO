@@ -258,7 +258,12 @@ class InstallerAgentTests(unittest.TestCase):
             return_value="sao.example.com",
         ), patch(
             "tools.azure.check_deployment_status",
-            return_value='Endpoint: https://sao.example.com\nHealth: {"status":"ok"}',
+            return_value=(
+                'Endpoint: https://sao.example.com\n'
+                'Ready: true\n'
+                'Runtime state: ready\n'
+                'Health: {"status":"ok"}'
+            ),
         ), patch(
             "time.sleep"
         ) as sleep_mock, patch(
@@ -298,6 +303,8 @@ class InstallerAgentTests(unittest.TestCase):
         self.assertIn("Provisioning complete.", output)
         self.assertIn("SAO endpoint: https://sao.example.com", output)
         self.assertIn("Bootstrap admin OID: oid-123", output)
+        self.assertIn("PostgreSQL admin credential", output)
+        self.assertNotIn("No passwords were created", output)
 
     def test_provisioning_polling_blank_input_keeps_waiting_without_model_call(self):
         agent = self._make_agent([])
@@ -326,7 +333,12 @@ class InstallerAgentTests(unittest.TestCase):
             return_value="sao.example.com",
         ), patch(
             "tools.azure.check_deployment_status",
-            return_value='Endpoint: https://sao.example.com\nHealth: {"status":"ok"}',
+            return_value=(
+                'Endpoint: https://sao.example.com\n'
+                'Ready: true\n'
+                'Runtime state: ready\n'
+                'Health: {"status":"ok"}'
+            ),
         ), patch(
             "time.sleep"
         ) as sleep_mock, patch(
@@ -344,6 +356,77 @@ class InstallerAgentTests(unittest.TestCase):
         self.assertIn('"provisioning_state": "Succeeded"', result)
         self.assertEqual(agent.client.messages.calls, [])
         sleep_mock.assert_called_once_with(POLL_INTERVAL_SECONDS)
+
+    def test_provisioning_polling_treats_runtime_failure_after_arm_success_as_failure(self):
+        agent = self._make_agent([])
+        status_sequence = iter(
+            [
+                '{"state":"Running","timestamp":"2026-03-15T12:00:00Z"}',
+                '{"state":"Succeeded","timestamp":"2026-03-15T12:00:30Z"}',
+            ]
+        )
+
+        with patch(
+            "tools.azure.validate_infrastructure_provisioning",
+            return_value='{"status":"Valid"}',
+        ), patch(
+            "tools.azure.start_infrastructure_provisioning",
+            return_value="",
+        ), patch(
+            "tools.azure.get_group_deployment_status",
+            side_effect=lambda **kwargs: next(status_sequence),
+        ), patch(
+            "tools.azure.list_resource_group_resource_types",
+            return_value="[]",
+        ), patch(
+            "tools.azure.get_group_deployment_endpoint",
+            return_value="sao.example.com",
+        ), patch(
+            "tools.azure.check_deployment_status",
+            return_value=(
+                "Endpoint: https://sao.example.com\n"
+                "Ready: false\n"
+                "Runtime state: failed\n"
+                "Revision: sao-app--rev1\n"
+                "Revision health: Unhealthy\n"
+                "Revision details: Container crashing: sao\n"
+                "Application logs:\n"
+                "- TLS upgrade required by connect options but SQLx was built without TLS support enabled"
+            ),
+        ), patch.object(
+            agent,
+            "_collect_failure_bundle",
+            return_value={
+                "issue_type": "containerapp_postgres_tls_mismatch",
+                "diagnosis": (
+                    "The deployed SAO image requires a TLS PostgreSQL connection, "
+                    "but SQLx TLS support is missing from the binary."
+                ),
+                "failed_resource": {
+                    "type": "Microsoft.App/containerApps",
+                    "name": "sao-app",
+                },
+                "evidence": [
+                    "TLS upgrade required by connect options but SQLx was built without TLS support enabled"
+                ],
+                "suggested_actions": ["retry_with_image_override"],
+            },
+        ), patch("time.sleep"), patch(
+            "builtins.input", return_value="   "
+        ), patch("sys.stdout", new=io.StringIO()):
+            result = agent._run_provisioning_with_polling(
+                {
+                    "resource_group": "sao-rg",
+                    "location": "eastus2",
+                    "admin_oid": "oid-123",
+                },
+                host_os="windows",
+            )
+
+        self.assertIn("COMMAND FAILED", result)
+        self.assertIn("Azure runtime verification", result)
+        self.assertIn("Likely issue:", result)
+        self.assertIn("Recommended fix: rebuild the SAO application image", result)
 
     def test_provisioning_polling_stops_on_failed_deployment(self):
         agent = self._make_agent([])

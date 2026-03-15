@@ -5,6 +5,7 @@ pub mod audit;
 pub mod migrate;
 pub mod oidc;
 pub mod pool;
+pub mod startup;
 pub mod sessions;
 pub mod skills;
 pub mod users;

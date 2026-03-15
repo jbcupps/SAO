@@ -156,6 +156,32 @@
       ]
     },
     {
+      "issue_type": "containerapp_postgres_tls_mismatch",
+      "match": {
+        "resource_type_contains": [
+          "microsoft.app/containerapps"
+        ],
+        "any_of": [
+          "tls upgrade required by connect options but sqlx was built without tls support enabled",
+          "built without tls support enabled",
+          "sqlx was built without tls support enabled"
+        ]
+      },
+      "diagnosis": "The SAO container started, but its Rust binary was built without SQLx TLS support while Azure Database for PostgreSQL requires TLS connections.",
+      "guided_actions": [
+        "retry_with_image_override",
+        "cleanup_resource_group"
+      ],
+      "manual_commands": [
+        "az containerapp show -g [[resource_group]] -n sao-app --output json",
+        "az containerapp revision list -g [[resource_group]] -n sao-app --all --output json",
+        "az containerapp replica list -g [[resource_group]] -n sao-app --output json",
+        "az containerapp logs show -g [[resource_group]] -n sao-app --tail 50 --output json",
+        "az containerapp logs show -g [[resource_group]] -n sao-app --type system --tail 50 --output json"
+      ],
+      "safe_to_auto_apply": []
+    },
+    {
       "issue_type": "containerapp_revision_failed",
       "match": {
         "resource_type_contains": [

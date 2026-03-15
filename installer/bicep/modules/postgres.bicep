@@ -34,4 +34,4 @@ resource pgFirewall 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@202
   }
 }
 
-output connectionString string = 'postgresql://saoadmin:${adminPassword}@${pgServer.properties.fullyQualifiedDomainName}:5432/sao?sslmode=require'
+output serverFqdn string = pgServer.properties.fullyQualifiedDomainName

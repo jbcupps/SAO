@@ -22,7 +22,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Starting SAO - Secure Agent Orchestrator");
 
     // Initialize database pool (required)
-    let pool = db::pool::init_pool().await;
+    let pool = db::pool::init_pool().await?;
 
     // Run database migrations
     db::migrate::run_migrations(&pool).await?;

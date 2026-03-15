@@ -10,7 +10,7 @@ The SAO installer is a Claude-powered conversational agent that replaces traditi
 2. **Entra-first**: Admin identity is seeded from Microsoft Entra ID — no generated throwaway credentials
 3. **Transparent**: An optional bash pane shows exactly what the agent executes
 4. **Idempotent**: Interrupted installs resume from the last completed step
-5. **Contained**: Runs inside the Docker container; only external calls are Entra auth and Graph API
+5. **Contained with explicit dependencies**: Runs inside the container, while intentionally calling Anthropic, Azure management APIs via `az`, Microsoft Entra ID, and Microsoft Graph
 
 ## Bootstrap Flow
 
@@ -131,6 +131,10 @@ The production Azure deployment includes:
 | PostgreSQL Flexible Server | `Microsoft.DBforPostgreSQL/flexibleServers` | Database (v16, burstable) |
 | PostgreSQL Database | `flexibleServers/databases` | `sao` database |
 
+- Production app image contract: `ghcr.io/jbcupps/sao:<tag>`, built from `docker/Dockerfile`
+- `DATABASE_URL` is injected into Container Apps through a `secretRef`, not a plain environment value
+- Deployment success means ARM provisioning succeeded, the latest Container App revision is healthy, and `/api/health` reports healthy
+
 ## Security Boundaries
 
 ### Installer Agent Permissions
@@ -142,12 +146,14 @@ The production Azure deployment includes:
 - Private keys encrypted at rest (AES-256-GCM)
 - OIDC client secrets encrypted in database
 - No secrets logged — tool results are sanitized
-- Installer state contains no sensitive material
+- Installer state avoids storing raw secrets, but it can contain sensitive operational metadata such as admin object IDs, resource names, and failure diagnostics
+- Installer conversation content and tool results are sent to Anthropic; local transcript files remain local unless an operator explicitly shares them
 
 ### Network Boundaries
 - Internal: SAO server API (localhost:3100), PostgreSQL (internal network)
-- External: Entra ID (login.microsoftonline.com), Graph API (graph.microsoft.com)
-- No other outbound connections
+- External: Anthropic API, Azure management APIs through `az`, Entra ID (login.microsoftonline.com), Graph API (graph.microsoft.com)
+- Runtime database traffic: Azure Container Apps connects to Azure Database for PostgreSQL over TLS
+- No other outbound connections are intended
 
 ## State Machine
 

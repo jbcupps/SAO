@@ -28,7 +28,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: docker/Dockerfile.sao
+          file: docker/Dockerfile
           push: true
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
