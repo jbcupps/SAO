@@ -68,6 +68,38 @@
       ]
     },
     {
+      "issue_type": "container_image_ghcr_private",
+      "match": {
+        "resource_type_contains": [
+          "microsoft.app/containerapps"
+        ],
+        "all_of": [
+          "ghcr.io"
+        ],
+        "any_of": [
+          "denied: requested access to the resource is denied",
+          "pull access denied",
+          "unauthorized",
+          "authentication required"
+        ]
+      },
+      "diagnosis": "The Container App reached GitHub Container Registry, but GHCR denied anonymous access to the configured image. This usually means the GHCR package is still private even if the GitHub repository is public.",
+      "guided_actions": [
+        "retry_with_image_override",
+        "cleanup_resource_group"
+      ],
+      "manual_commands": [
+        "az deployment group show -g [[resource_group]] -n container-app --query properties.error --output json",
+        "az deployment operation group list -g [[resource_group]] -n container-app --output json",
+        "az containerapp show -g [[resource_group]] -n sao-app --output json",
+        "docker manifest inspect [[image_reference]]",
+        "Confirm the GitHub Container Registry package for [[image_reference]] is set to Public in GitHub package settings"
+      ],
+      "safe_to_auto_apply": [
+        "retry_with_image_override"
+      ]
+    },
+    {
       "issue_type": "container_image_denied",
       "match": {
         "resource_type_contains": [

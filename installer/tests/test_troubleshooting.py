@@ -49,7 +49,7 @@ class TroubleshootingTests(unittest.TestCase):
         self.assertEqual(response["issue_type"], "keyvault_name_conflict")
         self.assertIn("retry_with_name_suffix", response["guided_actions"])
 
-    def test_classifies_container_image_denied(self):
+    def test_classifies_ghcr_private_package(self):
         response = troubleshooting.build_troubleshooting_response(
             {
                 "resource_group": "sao-rg",
@@ -66,8 +66,38 @@ class TroubleshootingTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(response["issue_type"], "container_image_denied")
+        self.assertEqual(response["issue_type"], "container_image_ghcr_private")
         self.assertIn("retry_with_image_override", response["guided_actions"])
+        self.assertIn("GHCR package", response["diagnosis"])
+        self.assertIn(
+            "Confirm the GitHub Container Registry package for ghcr.io/jbcupps/sao:latest is set to Public in GitHub package settings",
+            response["manual_commands"],
+        )
+        self.assertTrue(
+            any(
+                command == "docker manifest inspect ghcr.io/jbcupps/sao:latest"
+                for command in response["manual_commands"]
+            )
+        )
+
+    def test_classifies_container_image_denied_for_non_ghcr_registry(self):
+        response = troubleshooting.build_troubleshooting_response(
+            {
+                "resource_group": "sao-rg",
+                "deployment_name": "container-app",
+                "location": "eastus2",
+                "failed_resource_type": "Microsoft.App/containerApps",
+                "failed_resource_name": "sao-app",
+                "image_reference": "docker.io/example/sao:latest",
+                "raw_error": (
+                    "ContainerAppOperationError: unauthorized: authentication "
+                    "required"
+                ),
+                "evidence": ["docker.io/example/sao:latest"],
+            }
+        )
+
+        self.assertEqual(response["issue_type"], "container_image_denied")
         self.assertTrue(
             any("registry set" in command for command in response["manual_commands"])
         )

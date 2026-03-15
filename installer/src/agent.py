@@ -1891,6 +1891,12 @@ class InstallerAgent:
         if action == "retry_with_name_suffix":
             return "Retry with a short unique suffix so Azure gets fresh names."
         if action == "retry_with_image_override":
+            issue_type = str(bundle.get("issue_type") or "").strip().lower()
+            if issue_type == "container_image_ghcr_private":
+                return (
+                    "Make the GHCR package public in GitHub, or retry with an "
+                    "alternate image reference that Azure can pull."
+                )
             return "Retry with an alternate image reference that Azure can pull."
         if action == "cleanup_resource_group":
             return "Clean up the SAO test resource group and start fresh."
@@ -2056,6 +2062,17 @@ class InstallerAgent:
         diagnosis = str(diagnostics.get("diagnosis") or "").strip()
         if diagnosis:
             lines.append(f"Likely issue: {diagnosis}")
+
+        issue_type = str(diagnostics.get("issue_type") or "").strip().lower()
+        image_reference = str(
+            diagnostics.get("image_reference") or ""
+        ).strip()
+        if issue_type == "container_image_ghcr_private":
+            image_label = image_reference or "the configured GHCR image"
+            lines.append(
+                "Recommended fix: set the GitHub Container Registry package "
+                f"backing {image_label} to Public, then retry the deployment."
+            )
 
         failed_resource = diagnostics.get("failed_resource") or {}
         resource_type = str(failed_resource.get("type") or "").strip()

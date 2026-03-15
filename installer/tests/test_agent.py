@@ -517,6 +517,34 @@ class InstallerAgentTests(unittest.TestCase):
         self.assertIn("apply_guided_fix", prompt)
         self.assertIn("container_image_denied", prompt)
 
+    def test_format_provisioning_failure_message_calls_out_ghcr_visibility(self):
+        agent = self._make_agent([])
+
+        result = agent._format_provisioning_failure_message(
+            deployment_name="sao-bootstrap",
+            context_label="Provisioning start",
+            diagnostics={
+                "issue_type": "container_image_ghcr_private",
+                "diagnosis": (
+                    "The Container App reached GitHub Container Registry, but "
+                    "GHCR denied anonymous access to the configured image."
+                ),
+                "image_reference": "ghcr.io/jbcupps/sao:latest",
+                "failed_resource": {
+                    "type": "Microsoft.App/containerApps",
+                    "name": "sao-app",
+                },
+                "suggested_actions": ["retry_with_image_override"],
+            },
+        )
+
+        self.assertIn(
+            "set the GitHub Container Registry package backing "
+            "ghcr.io/jbcupps/sao:latest to Public",
+            result,
+        )
+        self.assertIn("Make the GHCR package public in GitHub", result)
+
     def test_declined_write_step_does_not_execute_tool(self):
         responses = [
             FakeResponse(
