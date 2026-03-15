@@ -69,6 +69,7 @@ class TroubleshootingTests(unittest.TestCase):
         self.assertEqual(response["issue_type"], "container_image_ghcr_private")
         self.assertIn("retry_with_image_override", response["guided_actions"])
         self.assertIn("GHCR package", response["diagnosis"])
+        self.assertIn("docker/Dockerfile", response["diagnosis"])
         self.assertIn(
             "Confirm the GitHub Container Registry package for ghcr.io/jbcupps/sao:latest is set to Public in GitHub package settings",
             response["manual_commands"],
@@ -116,6 +117,7 @@ class TroubleshootingTests(unittest.TestCase):
         )
 
         self.assertEqual(response["issue_type"], "container_image_not_found")
+        self.assertIn("installer helper image", response["diagnosis"])
 
     def test_classifies_containerapp_revision_failed(self):
         response = troubleshooting.build_troubleshooting_response(

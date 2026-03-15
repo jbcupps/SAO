@@ -600,6 +600,16 @@ class InstallerAgentTests(unittest.TestCase):
         self.assertIn("apply_guided_fix", prompt)
         self.assertIn("container_image_denied", prompt)
 
+    def test_runtime_system_prompt_calls_out_production_image_contract(self):
+        agent = self._make_agent([])
+
+        prompt = agent._build_runtime_system_prompt()
+
+        self.assertIn("ghcr.io/jbcupps/sao:<tag>", prompt)
+        self.assertIn("docker/Dockerfile", prompt)
+        self.assertIn("installer/Dockerfile", prompt)
+        self.assertIn("Never tell the operator to deploy it as the Azure Container App image".lower(), prompt.lower())
+
     def test_format_provisioning_failure_message_calls_out_ghcr_visibility(self):
         agent = self._make_agent([])
 
@@ -627,6 +637,7 @@ class InstallerAgentTests(unittest.TestCase):
             result,
         )
         self.assertIn("Make the GHCR package public in GitHub", result)
+        self.assertIn("docker/Dockerfile", result)
 
     def test_declined_write_step_does_not_execute_tool(self):
         responses = [

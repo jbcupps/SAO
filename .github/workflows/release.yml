@@ -9,6 +9,8 @@ on:
 
 env:
   VERSION: ${{ github.event.inputs.version }}
+  PRODUCTION_IMAGE_NAME: ghcr.io/jbcupps/sao
+  PRODUCTION_DOCKERFILE: docker/Dockerfile
 
 jobs:
   create-release:
@@ -91,7 +93,7 @@ jobs:
         run: gh release upload "v${{ env.VERSION }}" "${{ matrix.artifact }}" --clobber
 
   publish-docker:
-    name: Publish Docker Image
+    name: Publish Production Docker Image
     needs: create-release
     runs-on: ubuntu-latest
     permissions:
@@ -103,16 +105,16 @@ jobs:
       - name: Log in to GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-      - name: Build Docker image
-        run: docker build -f docker/Dockerfile -t ghcr.io/jbcupps/sao:${{ env.VERSION }} .
+      - name: Build production Docker image
+        run: docker build -f ${{ env.PRODUCTION_DOCKERFILE }} -t ${{ env.PRODUCTION_IMAGE_NAME }}:${{ env.VERSION }} .
 
       - name: Tag as latest
-        run: docker tag ghcr.io/jbcupps/sao:${{ env.VERSION }} ghcr.io/jbcupps/sao:latest
+        run: docker tag ${{ env.PRODUCTION_IMAGE_NAME }}:${{ env.VERSION }} ${{ env.PRODUCTION_IMAGE_NAME }}:latest
 
       - name: Push images
         run: |
-          docker push ghcr.io/jbcupps/sao:${{ env.VERSION }}
-          docker push ghcr.io/jbcupps/sao:latest
+          docker push ${{ env.PRODUCTION_IMAGE_NAME }}:${{ env.VERSION }}
+          docker push ${{ env.PRODUCTION_IMAGE_NAME }}:latest
 
   publish-npm:
     name: Publish npm Package

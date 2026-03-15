@@ -83,7 +83,7 @@
           "authentication required"
         ]
       },
-      "diagnosis": "The Container App reached GitHub Container Registry, but GHCR denied anonymous access to the configured image. This usually means the GHCR package is still private even if the GitHub repository is public.",
+      "diagnosis": "The Container App reached GitHub Container Registry, but GHCR denied anonymous access to the configured image. This usually means the GHCR package is still private even if the GitHub repository is public. The expected Azure runtime image is the SAO app image built from docker/Dockerfile, not the standalone installer image.",
       "guided_actions": [
         "retry_with_image_override",
         "cleanup_resource_group"
@@ -112,7 +112,7 @@
           "authentication required"
         ]
       },
-      "diagnosis": "The Container App reached the registry, but Azure could not pull the configured image because the registry denied access.",
+      "diagnosis": "The Container App reached the registry, but Azure could not pull the configured SAO application image because the registry denied access.",
       "guided_actions": [
         "retry_with_image_override",
         "cleanup_resource_group"
@@ -141,7 +141,7 @@
           "tag does not exist"
         ]
       },
-      "diagnosis": "The Container App image reference does not resolve to a pullable image in the registry.",
+      "diagnosis": "The Container App image reference does not resolve to a pullable SAO application image in the registry. Azure should point at the production SAO app image path, not the installer helper image.",
       "guided_actions": [
         "retry_with_image_override",
         "cleanup_resource_group"

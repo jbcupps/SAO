@@ -12,14 +12,14 @@ from typing import Any
 class BicepTools:
     """Tools for Azure Bicep deployments.
 
-    These tools allow the installer agent to:
-    - Validate Bicep templates
-    - Deploy Azure Container Apps + PostgreSQL Flexible Server
-    - Check deployment status
-    - Configure container environment variables
+        These tools allow the installer agent to:
+        - Validate Bicep templates
+        - Deploy Azure Container Apps + PostgreSQL Flexible Server
+        - Check deployment status
+        - Configure container environment variables
 
-    Note: Bicep deployment is optional — SAO can run entirely
-    in local Docker. These tools are for production Azure hosting.
+        Note: Bicep deployment is optional — SAO can run entirely
+        in local Docker. These tools are for production Azure hosting.
     """
 
     async def validate_template(self, template_path: str) -> dict[str, Any]:
@@ -46,8 +46,10 @@ class BicepTools:
         - Azure Container Apps environment
         - SAO container app
         - PostgreSQL Flexible Server
-        - Azure Container Registry
         - Managed Identity
+
+        The Azure runtime expects the production SAO application image
+        contract, not the standalone installer image.
 
         Args:
             resource_group: Azure resource group name.

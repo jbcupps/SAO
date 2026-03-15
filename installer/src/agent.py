@@ -144,7 +144,8 @@ TOOLS = [
                     "type": "string",
                     "description": (
                         "Optional full container image reference override for "
-                        "the SAO application"
+                        "the SAO application runtime image built from "
+                        "docker/Dockerfile, not installer/Dockerfile"
                     ),
                 },
             },
@@ -212,7 +213,8 @@ TOOLS = [
                     "type": "string",
                     "description": (
                         "Full container image reference to use for "
-                        "retry_with_image_override"
+                        "retry_with_image_override. This must be an SAO app "
+                        "runtime image, not the standalone installer image."
                     ),
                 },
                 "resource_group": {
@@ -2080,14 +2082,14 @@ class InstallerAgent:
             if issue_type == "container_image_ghcr_private":
                 return (
                     "Make the GHCR package public in GitHub, or retry with an "
-                    "alternate image reference that Azure can pull."
+                    "alternate SAO application image that Azure can pull."
                 )
             if issue_type == "containerapp_postgres_tls_mismatch":
                 return (
                     "Rebuild and redeploy the SAO app image with SQLx TLS "
                     "enabled, then retry with that image."
                 )
-            return "Retry with an alternate image reference that Azure can pull."
+            return "Retry with an alternate SAO application image that Azure can pull."
         if action == "cleanup_resource_group":
             return "Clean up the SAO test resource group and start fresh."
         return action.replace("_", " ")
@@ -2263,11 +2265,19 @@ class InstallerAgent:
                 "Recommended fix: set the GitHub Container Registry package "
                 f"backing {image_label} to Public, then retry the deployment."
             )
+            lines.append(
+                "Use the production SAO app image built from docker/Dockerfile, "
+                "not the standalone installer image."
+            )
         elif issue_type == "containerapp_postgres_tls_mismatch":
             lines.append(
                 "Recommended fix: rebuild the SAO application image with SQLx "
                 "Tokio+Rustls TLS support enabled, publish it, and redeploy "
                 "that image."
+            )
+            lines.append(
+                "That replacement image should still be the SAO runtime image "
+                "contract from docker/Dockerfile."
             )
 
         failed_resource = diagnostics.get("failed_resource") or {}

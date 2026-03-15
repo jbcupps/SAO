@@ -11,7 +11,10 @@ class WorkflowContractTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        self.assertIn("file: docker/Dockerfile", workflow)
+        self.assertIn("PRODUCTION_DOCKERFILE: docker/Dockerfile", workflow)
+        self.assertIn("file: ${{ env.PRODUCTION_DOCKERFILE }}", workflow)
+        self.assertIn("PRODUCTION_DOCKERFILE", workflow)
+        self.assertNotIn("installer/Dockerfile", workflow)
         self.assertNotIn("docker/Dockerfile.sao", workflow)
 
     def test_release_image_publish_uses_unified_production_dockerfile(self):
@@ -19,7 +22,10 @@ class WorkflowContractTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        self.assertIn("docker build -f docker/Dockerfile", workflow)
+        self.assertIn("PRODUCTION_DOCKERFILE: docker/Dockerfile", workflow)
+        self.assertIn("docker build -f ${{ env.PRODUCTION_DOCKERFILE }}", workflow)
+        self.assertIn("PRODUCTION_DOCKERFILE", workflow)
+        self.assertNotIn("installer/Dockerfile", workflow)
         self.assertNotIn("docker/Dockerfile.sao", workflow)
 
 
