@@ -1,6 +1,7 @@
 """SAO Installer — Conversation manager and tool dispatch."""
 
 import json
+import os
 from pathlib import Path
 
 import anthropic
@@ -243,6 +244,9 @@ class InstallerAgent:
 
     def _dispatch_tool(self, name: str, args: dict) -> str:
         """Route tool calls to implementations."""
+        host_os = os.environ.get("HOST_OS", "windows")
+        os.environ["HOST_OS"] = host_os
+
         from tools.azure import (
             az_login,
             check_deployment_status,
@@ -256,23 +260,30 @@ class InstallerAgent:
         from tools.validator import check_permissions
 
         dispatch = {
-            "az_login": lambda: az_login(),
-            "get_signed_in_user": lambda: get_signed_in_user(),
-            "list_subscriptions": lambda: list_subscriptions(),
+            "az_login": lambda: az_login(host_os=host_os),
+            "get_signed_in_user": lambda: get_signed_in_user(host_os=host_os),
+            "list_subscriptions": lambda: list_subscriptions(
+                host_os=host_os
+            ),
             "set_subscription": lambda: set_subscription(
-                args["subscription_id"]
+                args["subscription_id"], host_os=host_os
             ),
             "check_permissions": lambda: check_permissions(),
             "create_resource_group": lambda: create_resource_group(
-                args["name"], args["location"]
+                args["name"], args["location"], host_os=host_os
             ),
             "provision_infrastructure": lambda: provision_infrastructure(
-                args["resource_group"], args["location"], args["admin_oid"]
+                args["resource_group"],
+                args["location"],
+                args["admin_oid"],
+                host_os=host_os,
             ),
             "check_deployment_status": lambda: check_deployment_status(
-                args["resource_group"]
+                args["resource_group"], host_os=host_os
             ),
-            "run_az_command": lambda: run_az_command(args["command"]),
+            "run_az_command": lambda: run_az_command(
+                args["command"], host_os=host_os
+            ),
         }
 
         fn = dispatch.get(name)
@@ -288,7 +299,7 @@ class InstallerAgent:
 
     def _update_state(self, tool_name: str, args: dict, result: str):
         """Track installer state from tool outputs."""
-        if "COMMAND FAILED" in result:
+        if "COMMAND FAILED" in result or "COMMAND CANCELLED" in result:
             return
 
         try:
