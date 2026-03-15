@@ -24,6 +24,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=builder /app/target/release/sao-server /usr/local/bin/sao-server
 
+LABEL org.opencontainers.image.source="https://github.com/jbcupps/SAO"
+LABEL org.opencontainers.image.description="SAO Rust server image"
+LABEL org.opencontainers.image.licenses="MIT"
+
 ENV SAO_BIND_ADDR=0.0.0.0:3100
 ENV RUST_LOG=info
 

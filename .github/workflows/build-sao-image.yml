@@ -30,6 +30,10 @@ jobs:
           context: .
           file: docker/Dockerfile.sao
           push: true
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.description=SAO Rust server image
+            org.opencontainers.image.licenses=MIT
           tags: |
             ghcr.io/jbcupps/sao:latest
             ghcr.io/jbcupps/sao:${{ github.sha }}
