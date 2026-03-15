@@ -43,6 +43,12 @@ class MainTests(unittest.TestCase):
 
         collect_api_key_mock.assert_not_called()
 
+    def test_parse_args_supports_cleanup_alias_mode(self):
+        args = main.parse_args(["uninstall", "--resource-group", "sao-rg"])
+
+        self.assertEqual(args.mode, "uninstall")
+        self.assertEqual(args.resource_group, "sao-rg")
+
 
 if __name__ == "__main__":
     unittest.main()

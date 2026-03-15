@@ -15,6 +15,8 @@ _READ_ONLY_PREFIXES_2 = {
     ("account", "list"),
     ("containerapp", "show"),
     ("group", "show"),
+    ("keyvault", "list-deleted"),
+    ("keyvault", "show"),
     ("provider", "show"),
     ("resource", "list"),
 }
@@ -22,6 +24,10 @@ _READ_ONLY_PREFIXES_3 = {
     ("ad", "signed-in-user", "show"),
     ("deployment", "group", "show"),
     ("role", "assignment", "list"),
+}
+_READ_ONLY_PREFIXES_4 = {
+    ("deployment", "operation", "group", "list"),
+    ("deployment", "operation", "group", "show"),
 }
 
 
@@ -225,9 +231,41 @@ def is_safe_read_only_az_args(args: list[str]) -> bool:
         return True
     if tuple(normalized[:3]) in _READ_ONLY_PREFIXES_3:
         return True
+    if tuple(normalized[:4]) in _READ_ONLY_PREFIXES_4:
+        return True
     if normalized[0] == "rest":
         return _rest_uses_get(normalized)
     return False
+
+
+def _deployment_group_args(
+    command: str,
+    resource_group: str,
+    location: str,
+    admin_oid: str,
+    deployment_name: str,
+    name_suffix: str | None = None,
+) -> list[str]:
+    """Build consistent deployment or validation argv tokens."""
+    args = [
+        "deployment",
+        "group",
+        command,
+        "--name",
+        deployment_name,
+        "--resource-group",
+        resource_group,
+        "--template-file",
+        "/app/bicep/main.bicep",
+        "--parameters",
+        f"location={location}",
+        f"adminOid={admin_oid}",
+        "saoImageTag=latest",
+    ]
+    normalized_suffix = (name_suffix or "").strip().lower()
+    if normalized_suffix:
+        args.append(f"nameSuffix={normalized_suffix}")
+    return args
 
 
 def az_login(host_os: str | None = None) -> str:
@@ -312,6 +350,7 @@ def provision_infrastructure(
     admin_oid: str,
     host_os: str | None = None,
     deployment_name: str = DEFAULT_DEPLOYMENT_NAME,
+    name_suffix: str | None = None,
 ) -> str:
     """Deploy the SAO Bicep template."""
     return start_infrastructure_provisioning(
@@ -320,6 +359,7 @@ def provision_infrastructure(
         admin_oid=admin_oid,
         host_os=host_os,
         deployment_name=deployment_name,
+        name_suffix=name_suffix,
     )
 
 
@@ -329,28 +369,50 @@ def start_infrastructure_provisioning(
     admin_oid: str,
     host_os: str | None = None,
     deployment_name: str = DEFAULT_DEPLOYMENT_NAME,
+    name_suffix: str | None = None,
 ) -> str:
     """Start the SAO Bicep deployment without waiting for completion."""
     return _run(
         [
-            "deployment",
-            "group",
-            "create",
-            "--name",
-            deployment_name,
-            "--resource-group",
-            resource_group,
-            "--template-file",
-            "/app/bicep/main.bicep",
-            "--parameters",
-            f"location={location}",
-            f"adminOid={admin_oid}",
-            "saoImageTag=latest",
+            *_deployment_group_args(
+                "create",
+                resource_group=resource_group,
+                location=location,
+                admin_oid=admin_oid,
+                deployment_name=deployment_name,
+                name_suffix=name_suffix,
+            ),
             "--no-wait",
             "--output",
             "json",
         ],
         parse_json=False,
+        host_os=host_os,
+    )
+
+
+def validate_infrastructure_provisioning(
+    resource_group: str,
+    location: str,
+    admin_oid: str,
+    host_os: str | None = None,
+    deployment_name: str = DEFAULT_DEPLOYMENT_NAME,
+    name_suffix: str | None = None,
+) -> str:
+    """Validate the SAO Bicep deployment before the write starts."""
+    return _run(
+        [
+            *_deployment_group_args(
+                "validate",
+                resource_group=resource_group,
+                location=location,
+                admin_oid=admin_oid,
+                deployment_name=deployment_name,
+                name_suffix=name_suffix,
+            ),
+            "--output",
+            "json",
+        ],
         host_os=host_os,
     )
 
@@ -420,6 +482,94 @@ def list_resource_group_resource_types(
             "json",
         ],
         host_os=host_os,
+    )
+
+
+def get_group_deployment_error(
+    resource_group: str,
+    deployment_name: str = DEFAULT_DEPLOYMENT_NAME,
+    host_os: str | None = None,
+) -> str:
+    """Read the structured ARM deployment error payload when available."""
+    return _run(
+        [
+            "deployment",
+            "group",
+            "show",
+            "--resource-group",
+            resource_group,
+            "--name",
+            deployment_name,
+            "--query",
+            "properties.error",
+            "--output",
+            "json",
+        ],
+        host_os=host_os,
+    )
+
+
+def list_group_deployment_operations(
+    resource_group: str,
+    deployment_name: str = DEFAULT_DEPLOYMENT_NAME,
+    host_os: str | None = None,
+) -> str:
+    """List ARM deployment operations to pinpoint the failing resource."""
+    return _run(
+        [
+            "deployment",
+            "operation",
+            "group",
+            "list",
+            "--resource-group",
+            resource_group,
+            "--name",
+            deployment_name,
+            "--output",
+            "json",
+        ],
+        host_os=host_os,
+    )
+
+
+def list_deleted_key_vaults(host_os: str | None = None) -> str:
+    """List deleted Key Vaults visible to the active subscription."""
+    return _run(
+        [
+            "keyvault",
+            "list-deleted",
+            "--resource-type",
+            "vault",
+            "--output",
+            "json",
+        ],
+        host_os=host_os,
+    )
+
+
+def purge_deleted_key_vault(
+    name: str,
+    location: str,
+    host_os: str | None = None,
+) -> str:
+    """Permanently purge a soft-deleted Key Vault so the name can be reused."""
+    result = _run(
+        [
+            "keyvault",
+            "purge",
+            "--name",
+            name,
+            "--location",
+            location,
+        ],
+        parse_json=False,
+        host_os=host_os,
+    )
+    if "COMMAND FAILED" in result or "COMMAND CANCELLED" in result:
+        return result
+    return (
+        f"Purge requested for deleted Key Vault {name} in {location}. "
+        "Azure is clearing the soft-deleted name so the deployment can reuse it."
     )
 
 

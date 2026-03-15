@@ -7,11 +7,16 @@ param adminOid string
 @description('SAO container image tag')
 param saoImageTag string = 'latest'
 
+@description('Optional short suffix used to avoid global name collisions')
+@maxLength(3)
+param nameSuffix string = ''
+
 @description('PostgreSQL admin password')
 @secure()
 param pgAdminPassword string = newGuid()
 
-var baseName = 'sao-${uniqueString(resourceGroup().id)}'
+var normalizedSuffix = empty(nameSuffix) ? '' : '-${toLower(nameSuffix)}'
+var baseName = 'sao-${uniqueString(resourceGroup().id)}${normalizedSuffix}'
 
 module postgres 'modules/postgres.bicep' = {
   name: 'postgres'

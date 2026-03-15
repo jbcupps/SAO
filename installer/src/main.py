@@ -26,6 +26,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse installer CLI arguments."""
     parser = argparse.ArgumentParser(description="SAO installer bootstrapper")
     parser.add_argument(
+        "mode",
+        nargs="?",
+        choices=("cleanup", "uninstall"),
+        help="Start directly in cleanup mode",
+    )
+    parser.add_argument(
         "--cleanup",
         action="store_true",
         help="Delete a prior SAO test resource group instead of starting an install",
@@ -74,8 +80,9 @@ def collect_api_key() -> tuple[str, str]:
 
 def main(argv: list[str] | None = None):
     args = parse_args(argv)
+    cleanup_requested = args.cleanup or args.mode in {"cleanup", "uninstall"}
 
-    if args.cleanup:
+    if cleanup_requested:
         print(BANNER)
         resource_group = (args.resource_group or "").strip()
         if not resource_group:

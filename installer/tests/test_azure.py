@@ -74,6 +74,14 @@ class AzureToolTests(unittest.TestCase):
                 ["role", "assignment", "list", "--assignee", "oid"]
             )
         )
+        self.assertTrue(
+            azure.is_safe_read_only_az_args(
+                ["deployment", "operation", "group", "list", "--name", "sao-bootstrap"]
+            )
+        )
+        self.assertTrue(
+            azure.is_safe_read_only_az_args(["keyvault", "list-deleted"])
+        )
         self.assertFalse(
             azure.is_safe_read_only_az_args(
                 ["group", "create", "--name", "sao-rg"]
@@ -111,6 +119,43 @@ class AzureToolTests(unittest.TestCase):
                 "adminOid=oid-123",
                 "saoImageTag=latest",
                 "--no-wait",
+                "--output",
+                "json",
+            ],
+        )
+
+    def test_validate_infrastructure_provisioning_supports_optional_suffix(self):
+        result = Mock(returncode=0, stdout='{"status":"Valid"}', stderr="")
+
+        with patch.object(
+            azure, "_resolve_azure_cli_path", return_value="/usr/bin/az"
+        ), patch("tools.azure.subprocess.run", return_value=result) as run_mock:
+            azure.validate_infrastructure_provisioning(
+                resource_group="sao-rg",
+                location="eastus2",
+                admin_oid="oid-123",
+                host_os="windows",
+                name_suffix="a7c",
+            )
+
+        self.assertEqual(
+            run_mock.call_args.args[0],
+            [
+                "/usr/bin/az",
+                "deployment",
+                "group",
+                "validate",
+                "--name",
+                azure.DEFAULT_DEPLOYMENT_NAME,
+                "--resource-group",
+                "sao-rg",
+                "--template-file",
+                "/app/bicep/main.bicep",
+                "--parameters",
+                "location=eastus2",
+                "adminOid=oid-123",
+                "saoImageTag=latest",
+                "nameSuffix=a7c",
                 "--output",
                 "json",
             ],
@@ -171,6 +216,27 @@ class AzureToolTests(unittest.TestCase):
                 "--name",
                 "sao-rg",
                 "--yes",
+            ],
+        )
+
+    def test_list_deleted_key_vaults_uses_expected_command(self):
+        result = Mock(returncode=0, stdout="[]", stderr="")
+
+        with patch.object(
+            azure, "_resolve_azure_cli_path", return_value="/usr/bin/az"
+        ), patch("tools.azure.subprocess.run", return_value=result) as run_mock:
+            azure.list_deleted_key_vaults(host_os="windows")
+
+        self.assertEqual(
+            run_mock.call_args.args[0],
+            [
+                "/usr/bin/az",
+                "keyvault",
+                "list-deleted",
+                "--resource-type",
+                "vault",
+                "--output",
+                "json",
             ],
         )
 
