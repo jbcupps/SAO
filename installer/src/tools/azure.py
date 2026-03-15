@@ -7,7 +7,7 @@ import shlex
 import subprocess
 
 HOST_OS = os.environ.get("HOST_OS", "windows" if os.name == "nt" else "linux")
-AZURE_CLI_PATH = "/usr/local/bin/az"
+AZURE_CLI_PATHS = ("/usr/bin/az", "/usr/local/bin/az")
 
 
 def _normalize_host_os(host_os: str | None = None) -> str:
@@ -54,6 +54,68 @@ def _confirm_command(display_command: str, host_os: str) -> bool:
         print("Please enter 'y' or 'n'.")
 
 
+def _is_device_code_login(args: list[str]) -> bool:
+    """Return True when the command is az login --use-device-code."""
+    return args[:2] == ["login", "--use-device-code"]
+
+
+def _print_device_code_instructions(host_os: str):
+    """Print clear host-browser instructions for device code login."""
+    if host_os != "windows":
+        return
+
+    print(
+        "\n========================================================================\n"
+        "AZURE DEVICE CODE LOGIN (Windows)\n\n"
+        "Open this URL in your Windows browser:\n"
+        "https://microsoft.com/devicelogin\n"
+        "Enter the code shown below when prompted.\n"
+        "Sign in with your Entra ID account.\n"
+        "========================================================================"
+    )
+
+
+def _resolve_azure_cli_path() -> str | None:
+    """Resolve the Azure CLI path inside the Linux container."""
+    for candidate in AZURE_CLI_PATHS:
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def _run_with_streaming_output(command: list[str]) -> tuple[int, str]:
+    """Run a command and stream combined output to the terminal."""
+    process = subprocess.Popen(
+        command,
+        shell=False,
+        executable="/bin/bash",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    output_lines: list[str] = []
+
+    try:
+        if process.stdout is not None:
+            for line in process.stdout:
+                print(line, end="")
+                output_lines.append(line)
+        returncode = process.wait(timeout=300)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        try:
+            remaining_output, _ = process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            remaining_output = ""
+        if remaining_output:
+            print(remaining_output, end="")
+            output_lines.append(remaining_output)
+        return -1, "".join(output_lines)
+
+    return returncode, "".join(output_lines)
+
+
 def _run(
     args: list[str],
     parse_json: bool = True,
@@ -64,10 +126,39 @@ def _run(
     display_command = _format_display_command(args, normalized_host_os)
     if not _confirm_command(display_command, normalized_host_os):
         return "COMMAND CANCELLED: User declined to run command."
+    if _is_device_code_login(args):
+        _print_device_code_instructions(normalized_host_os)
 
-    run_args = [AZURE_CLI_PATH, *args]
+    azure_cli_path = _resolve_azure_cli_path()
+    if azure_cli_path is None:
+        message = (
+            "COMMAND FAILED: Azure CLI was not found in the container. "
+            "Expected /usr/bin/az from the official "
+            "mcr.microsoft.com/azure-cli:latest base image. "
+            "Rebuild the installer image and try again."
+        )
+        print(message)
+        return message
+
+    run_args = [azure_cli_path, *args]
     bash_command = shlex.join(run_args)
     print(f"DEBUG: executing via /bin/bash -lc {shlex.quote(bash_command)}")
+
+    if _is_device_code_login(args):
+        try:
+            returncode, streamed_output = _run_with_streaming_output(
+                ["/bin/bash", "-lc", bash_command]
+            )
+        except FileNotFoundError as exc:
+            return f"COMMAND FAILED: {exc}"
+        if returncode == -1:
+            return "COMMAND FAILED: Azure CLI command timed out after 300 seconds."
+        if returncode != 0:
+            return (
+                f"COMMAND FAILED (exit {returncode}):\n"
+                f"{streamed_output.strip()}"
+            )
+        return streamed_output.strip()
 
     try:
         result = subprocess.run(

@@ -1,14 +1,12 @@
-FROM python:3.12-slim
+FROM mcr.microsoft.com/azure-cli:latest
 
-# Azure CLI
-RUN apt-get update && \
-    apt-get install -y curl apt-transport-https lsb-release gnupg && \
-    curl -sL https://aka.ms/InstallAzureCLIDeb | bash && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+RUN tdnf install -y python3-pip && \
+    ln -sf /usr/bin/python3.12 /usr/bin/python && \
+    tdnf clean all
 
 # Python deps
 COPY requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r /app/requirements.txt
+RUN python -m pip install --no-cache-dir -r /app/requirements.txt
 
 # Application
 COPY src/ /app/src/
