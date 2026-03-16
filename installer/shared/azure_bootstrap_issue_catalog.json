@@ -156,6 +156,27 @@
       ]
     },
     {
+      "issue_type": "postgres_extension_not_allow_listed",
+      "match": {
+        "any_of": [
+          "extension \"pgcrypto\" is not allow-listed",
+          "pgcrypto is not allow-listed",
+          "not allow-listed for users in azure database for postgresql"
+        ]
+      },
+      "diagnosis": "The SAO container reached the database, but migration 1 failed because the Azure Database for PostgreSQL server was created without allow-listing the required pgcrypto extension.",
+      "guided_actions": [
+        "cleanup_resource_group"
+      ],
+      "manual_commands": [
+        "az postgres flexible-server parameter show --resource-group [[resource_group]] --server-name [[postgres_server_name]] --name azure.extensions --output json",
+        "az postgres flexible-server parameter set --resource-group [[resource_group]] --server-name [[postgres_server_name]] --name azure.extensions --value pgcrypto",
+        "az containerapp logs show -g [[resource_group]] -n [[container_app_name]] --tail 100 --output json",
+        "az containerapp logs show -g [[resource_group]] -n [[container_app_name]] --type system --tail 100 --output json"
+      ],
+      "safe_to_auto_apply": []
+    },
+    {
       "issue_type": "containerapp_postgres_tls_mismatch",
       "match": {
         "resource_type_contains": [

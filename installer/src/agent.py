@@ -2369,6 +2369,12 @@ class InstallerAgent:
         evidence_lines.extend(self._extract_activity_log_evidence(activity_log_summary))
         if "COMMAND FAILED" in activity_log_result:
             evidence_lines.append(activity_log_result.strip())
+        postgres_server_name = ""
+        for resource in resource_inventory_summary:
+            resource_type = str(resource.get("type") or "").strip().lower()
+            if resource_type == "microsoft.dbforpostgresql/flexibleservers":
+                postgres_server_name = str(resource.get("name") or "").strip()
+                break
         evidence_lines = self._dedupe_lines(evidence_lines)
         combined_evidence = "\n".join(evidence_lines)
         container_app_summary = self._summarize_container_app_diagnostics(
@@ -2415,6 +2421,7 @@ class InstallerAgent:
                 "deleted_vault": deleted_vault_match,
                 "image_reference": image_reference,
                 "container_app_name": str(failed_resource.get("name") or "").strip(),
+                "postgres_server_name": postgres_server_name,
                 "host_os": host_os,
                 "revision": (
                     container_app_summary.get("latest_revision")
@@ -2452,6 +2459,7 @@ class InstallerAgent:
             "deleted_vault": deleted_vault_match,
             "image_reference": image_reference,
             "container_app_name": str(failed_resource.get("name") or "").strip(),
+            "postgres_server_name": postgres_server_name,
             "container_app": container_app_summary,
             "runtime_startup_stage": runtime_startup_stage,
             "revision": (

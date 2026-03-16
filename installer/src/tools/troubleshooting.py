@@ -63,6 +63,9 @@ def _normalize_context(request: dict[str, Any]) -> dict[str, str]:
         "container_app_name": str(
             request.get("container_app_name") or ""
         ).strip(),
+        "postgres_server_name": str(
+            request.get("postgres_server_name") or ""
+        ).strip(),
         "revision": str(request.get("revision") or "").strip(),
         "runtime_startup_stage": str(
             request.get("runtime_startup_stage") or ""

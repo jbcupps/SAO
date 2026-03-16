@@ -42,6 +42,7 @@ _READ_ONLY_PREFIXES_3 = {
 _READ_ONLY_PREFIXES_4 = {
     ("deployment", "operation", "group", "list"),
     ("deployment", "operation", "group", "show"),
+    ("postgres", "flexible-server", "parameter", "show"),
 }
 
 

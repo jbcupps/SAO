@@ -114,6 +114,20 @@ class AzureToolTests(unittest.TestCase):
         )
         self.assertTrue(
             azure.is_safe_read_only_az_args(
+                [
+                    "postgres",
+                    "flexible-server",
+                    "parameter",
+                    "show",
+                    "--server-name",
+                    "sao-pg",
+                    "--name",
+                    "azure.extensions",
+                ]
+            )
+        )
+        self.assertTrue(
+            azure.is_safe_read_only_az_args(
                 ["resource", "show", "--ids", "/subscriptions/example"]
             )
         )

@@ -19,6 +19,15 @@ resource pgServer 'Microsoft.DBforPostgreSQL/flexibleServers@2023-12-01-preview'
   }
 }
 
+resource pgAllowedExtensions 'Microsoft.DBforPostgreSQL/flexibleServers/configurations@2023-12-01-preview' = {
+  parent: pgServer
+  name: 'azure.extensions'
+  properties: {
+    value: 'pgcrypto'
+    source: 'user-override'
+  }
+}
+
 resource pgDatabase 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2023-12-01-preview' = {
   parent: pgServer
   name: 'sao'
