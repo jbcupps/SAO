@@ -1,3 +1,4 @@
+use base64::Engine;
 use openidconnect::{
     core::{CoreProviderMetadata, CoreResponseType},
     AuthenticationFlow, AuthorizationCode, ClientId, ClientSecret, CsrfToken, IssuerUrl, Nonce,
@@ -27,6 +28,7 @@ pub struct OidcUserInfo {
     pub subject: String,
     pub email: Option<String>,
     pub name: Option<String>,
+    pub oid: Option<String>,
 }
 
 /// Generate an authorization URL for the OIDC provider.
@@ -135,10 +137,57 @@ pub async fn exchange_code(
             localized.get(None)
         })
         .map(|n| n.to_string());
+    let oid = extract_claim_string(&id_token.to_string(), "oid");
 
     Ok(OidcUserInfo {
         subject,
         email,
         name,
+        oid,
     })
+}
+
+fn extract_claim_string(id_token: &str, claim_name: &str) -> Option<String> {
+    let mut parts = id_token.split('.');
+    let _header = parts.next()?;
+    let payload = parts.next()?;
+
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .ok()?;
+    let claims: serde_json::Value = serde_json::from_slice(&decoded).ok()?;
+
+    claims
+        .get(claim_name)
+        .and_then(|value| value.as_str())
+        .map(ToString::to_string)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_claim_string;
+    use base64::Engine;
+
+    #[test]
+    fn extract_claim_string_reads_oid_from_id_token_payload() {
+        let header = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(r#"{"alg":"none"}"#);
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(r#"{"sub":"subject-1","oid":"entra-oid-123"}"#);
+        let id_token = format!("{header}.{payload}.signature");
+
+        assert_eq!(
+            extract_claim_string(&id_token, "oid").as_deref(),
+            Some("entra-oid-123")
+        );
+    }
+
+    #[test]
+    fn extract_claim_string_returns_none_for_missing_claim() {
+        let header = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(r#"{"alg":"none"}"#);
+        let payload =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(r#"{"sub":"subject-1"}"#);
+        let id_token = format!("{header}.{payload}.signature");
+
+        assert_eq!(extract_claim_string(&id_token, "oid"), None);
+    }
 }

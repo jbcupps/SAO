@@ -104,14 +104,20 @@ async fn authorize(
         "nonce": result.nonce.secret(),
     });
 
-    let _ = crate::db::webauthn::store_challenge(
+    crate::db::webauthn::store_challenge(
         &state.inner.db,
         result.csrf_token.secret(),
         state_json,
         "oidc",
         None,
     )
-    .await;
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("Failed to persist OIDC state: {}", e) })),
+        )
+    })?;
 
     Ok(Redirect::temporary(result.auth_url.as_str()))
 }
@@ -219,23 +225,54 @@ async fn callback(
         };
 
     // Find or create user
-    let user_id =
-        match crate::db::oidc::find_user_by_oidc(&state.inner.db, provider_id, &user_info.subject)
-            .await
-        {
-            Ok(Some(uid)) => uid,
-            Ok(None) => {
-                // Create new user from OIDC info
-                let username = user_info.email.as_deref().unwrap_or(&user_info.subject);
-                let display_name = user_info.name.as_deref().or(user_info.email.as_deref());
+    let bootstrap_admin = is_bootstrap_admin(&user_info);
 
-                let uid = match crate::db::users::create_user(
-                    &state.inner.db,
-                    username,
-                    display_name,
-                    "user",
-                )
-                .await
+    let user_id = match crate::db::oidc::find_user_by_oidc(
+        &state.inner.db,
+        provider_id,
+        &user_info.subject,
+    )
+    .await
+    {
+        Ok(Some(uid)) => uid,
+        Ok(None) => {
+            let username = user_info.email.as_deref().unwrap_or(&user_info.subject);
+            let display_name = user_info.name.as_deref().or(user_info.email.as_deref());
+            let role = if bootstrap_admin { "admin" } else { "user" };
+
+            let existing_user =
+                match crate::db::users::get_user_by_username(&state.inner.db, username).await {
+                    Ok(user) => user,
+                    Err(e) => {
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(json!({ "error": format!("Failed to look up user: {}", e) })),
+                        );
+                    }
+                };
+
+            let uid = if let Some(existing_user) = existing_user {
+                if bootstrap_admin && existing_user.role != "admin" {
+                    if let Err(e) = crate::db::users::update_user_role(
+                        &state.inner.db,
+                        existing_user.id,
+                        "admin",
+                    )
+                    .await
+                    {
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(
+                                json!({ "error": format!("Failed to promote bootstrap admin: {}", e) }),
+                            ),
+                        );
+                    }
+                }
+
+                existing_user.id
+            } else {
+                match crate::db::users::create_user(&state.inner.db, username, display_name, role)
+                    .await
                 {
                     Ok(id) => id,
                     Err(e) => {
@@ -244,32 +281,43 @@ async fn callback(
                             Json(json!({ "error": format!("Failed to create user: {}", e) })),
                         );
                     }
-                };
-
-                // Link OIDC identity
-                if let Err(e) = crate::db::oidc::link_user_to_oidc(
-                    &state.inner.db,
-                    uid,
-                    provider_id,
-                    &user_info.subject,
-                    user_info.email.as_deref(),
-                )
-                .await
-                {
-                    tracing::error!("Failed to link OIDC identity: {}", e);
                 }
+            };
 
-                uid
+            // Link OIDC identity
+            if let Err(e) = crate::db::oidc::link_user_to_oidc(
+                &state.inner.db,
+                uid,
+                provider_id,
+                &user_info.subject,
+                user_info.email.as_deref(),
+            )
+            .await
+            {
+                tracing::error!("Failed to link OIDC identity: {}", e);
             }
-            Err(e) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "error": e.to_string() })),
-                );
-            }
-        };
+
+            uid
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            );
+        }
+    };
 
     // Load user for JWT
+    if bootstrap_admin {
+        if let Err(e) = crate::db::users::update_user_role(&state.inner.db, user_id, "admin").await
+        {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("Failed to promote bootstrap admin: {}", e) })),
+            );
+        }
+    }
+
     let user = match crate::db::users::get_user_by_id(&state.inner.db, user_id).await {
         Ok(Some(u)) => u,
         _ => {
@@ -336,4 +384,39 @@ async fn callback(
             },
         })),
     )
+}
+
+fn is_bootstrap_admin(user_info: &crate::auth::oidc::OidcUserInfo) -> bool {
+    let bootstrap_admin_oid = std::env::var("SAO_BOOTSTRAP_ADMIN_OID")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    let Some(bootstrap_admin_oid) = bootstrap_admin_oid else {
+        return false;
+    };
+
+    user_info.oid.as_deref() == Some(bootstrap_admin_oid.as_str())
+        || user_info.subject == bootstrap_admin_oid
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_bootstrap_admin;
+
+    #[test]
+    fn bootstrap_admin_matches_entra_oid_claim() {
+        unsafe {
+            std::env::set_var("SAO_BOOTSTRAP_ADMIN_OID", "admin-oid-123");
+        }
+
+        let user = crate::auth::oidc::OidcUserInfo {
+            subject: "subject-1".to_string(),
+            email: Some("user@example.com".to_string()),
+            name: Some("User".to_string()),
+            oid: Some("admin-oid-123".to_string()),
+        };
+
+        assert!(is_bootstrap_admin(&user));
+    }
 }
