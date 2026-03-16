@@ -200,26 +200,63 @@ async fn register_finish(
 
 #[derive(Deserialize)]
 struct LoginStartRequest {
-    username: String,
+    username: Option<String>,
 }
 
 async fn login_start(
     State(state): State<AppState>,
     Json(req): Json<LoginStartRequest>,
 ) -> (StatusCode, Json<Value>) {
-    let user = match crate::db::users::get_user_by_username(&state.inner.db, &req.username).await {
-        Ok(Some(u)) => u,
-        Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "User not found" })),
-            );
+    let requested_username = req
+        .username
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    let user = if let Some(username) = requested_username {
+        match crate::db::users::get_user_by_username(&state.inner.db, username).await {
+            Ok(Some(user)) => user,
+            Ok(None) => {
+                match crate::db::users::get_single_user_with_credentials(&state.inner.db).await {
+                    Ok(Some(user)) => user,
+                    Ok(None) => {
+                        return (
+                            StatusCode::NOT_FOUND,
+                            Json(json!({ "error": "User not found" })),
+                        );
+                    }
+                    Err(e) => {
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(json!({ "error": e.to_string() })),
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": e.to_string() })),
+                );
+            }
         }
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": e.to_string() })),
-            );
+    } else {
+        match crate::db::users::get_single_user_with_credentials(&state.inner.db).await {
+            Ok(Some(user)) => user,
+            Ok(None) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({
+                        "error": "Username is only optional when exactly one local Windows Hello account is registered"
+                    })),
+                );
+            }
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": e.to_string() })),
+                );
+            }
         }
     };
 

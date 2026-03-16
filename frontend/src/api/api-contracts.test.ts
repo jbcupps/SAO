@@ -90,6 +90,24 @@ describe('frontend api contract adapters', () => {
     );
   });
 
+  it('allows username-less webauthn login start requests', async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        challenge_id: 'c2',
+        challenge: { challenge: 'def', rpId: 'localhost' },
+      }),
+    );
+
+    await webauthnLoginStart();
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/auth/webauthn/login/start',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ username: undefined }),
+      }),
+    );
+  });
+
   it('uses admin oidc provider namespace', async () => {
     fetchMock.mockResolvedValueOnce(
       makeResponse({ providers: [{ id: 'p1', name: 'Entra', enabled: true }] }),

@@ -49,6 +49,26 @@ pub async fn get_user_by_username(
     .await
 }
 
+pub async fn get_single_user_with_credentials(
+    pool: &PgPool,
+) -> Result<Option<UserRow>, sqlx::Error> {
+    let rows = sqlx::query_as::<_, UserRow>(
+        "SELECT u.id, u.username, u.display_name, u.role, u.created_at, u.updated_at \
+         FROM users u \
+         WHERE EXISTS (SELECT 1 FROM webauthn_credentials wc WHERE wc.user_id = u.id) \
+         ORDER BY u.created_at \
+         LIMIT 2",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(if rows.len() == 1 {
+        rows.into_iter().next()
+    } else {
+        None
+    })
+}
+
 pub async fn list_users(pool: &PgPool) -> Result<Vec<UserRow>, sqlx::Error> {
     sqlx::query_as::<_, UserRow>(
         "SELECT id, username, display_name, role, created_at, updated_at FROM users ORDER BY created_at",

@@ -53,7 +53,7 @@ export async function webauthnRegisterFinish(
 }
 
 export async function webauthnLoginStart(
-  username: string,
+  username?: string,
 ): Promise<{ challenge_id: string; options: PublicKeyCredentialRequestOptions }> {
   const res = await apiRequest<{
     challenge_id: string;

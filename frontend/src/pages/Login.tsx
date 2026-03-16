@@ -33,15 +33,11 @@ export default function Login() {
 
   const handleWebAuthnLogin = async () => {
     setError('');
-    if (!username.trim()) {
-      setError('Please enter your username');
-      return;
-    }
-
     setLoading(true);
     try {
+      const requestedUsername = username.trim();
       const { challenge_id, options } = await webauthnLoginStart(
-        username.trim(),
+        requestedUsername || undefined,
       );
       const credential = await beginAuthentication(options as never);
       const tokens = await webauthnLoginFinish(challenge_id, credential);
@@ -85,17 +81,21 @@ export default function Login() {
             {/* Username */}
             <div>
               <label className="block text-sm font-medium text-gray-300 mb-1">
-                Username
+                Username (optional)
               </label>
               <input
                 type="text"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="Enter your username"
+                placeholder="Leave blank for the local Windows Hello account"
                 autoFocus
                 className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
               />
+              <p className="text-xs text-gray-500 mt-1">
+                On single-user local installs, SAO can resolve the Windows Hello
+                account automatically.
+              </p>
             </div>
 
             {/* WebAuthn Login */}
