@@ -1,34 +1,18 @@
-## Chunk 3 Verification - 05 March 2026
-- Codex CLI changes applied (registry status endpoint + personality preview)
-- Local Docker test passed
-- GET /api/agents/{id} JSON: {"agent_id":"test123","documents":["soul.md","ethics.md","org-map.md","personality.md"],"last_heartbeat":"just now","personality_preview":"ego traits (editable by Superego only)","soul_immutable":true,"status":"READY"}
-- Status: PASS
+# Testing Status
 
-## Chunk 4 Verification - 05 March 2026
-- Codex CLI changes applied (TriangleEthic stub in birth flow)
-- Local Docker test passed
-- triangleethic_preview JSON: {"areteological":87,"deontological":92,"dual_welfare":"AI sentient = human (balanced)","memetic_fitness":0.94,"teleological":95}
-- Status: PASS
+Validation completed on 2026-03-16:
 
-## Chunk 5 Verification - 05 March 2026
-- Codex CLI changes applied
-- Local Docker test passed
-- Audit log line: 2026-03-06T02:56:44.529797Z  INFO sao_server::db::audit: AUDIT: Agent cfb63962-273d-4e40-be1d-8cf3cfb90b07 born with immutable soul.md + TriangleEthic preview
-- Status: PASS
+- `cargo test`
+- `cargo clippy --workspace -- -D warnings`
+- `npm --prefix frontend test`
+- `npm --prefix frontend run build`
+- `python -m unittest discover installer/tests`
+- `POSTGRES_PASSWORD=local-dev-only-change-me docker compose -f docker/docker-compose.yml config`
+- `az bicep build --file installer/bicep/main.bicep`
 
-## Chunk 6 Verification - 05 March 2026
-- Codex CLI changes applied (periodic Superego roll-up in heartbeat)
-- Local Docker test passed
-- Roll-up log line: 2026-03-06T03:08:56.569092Z  INFO sao_server::ws: Superego roll-up: Periodic Superego roll-up for test123: personality tweak queued (soul.md untouched)
-- Status: PASS
+Result: pass.
 
-## Contract Remediation Verification - 14 March 2026
-- Frontend API contract tests added: `frontend/src/api/api-contracts.test.ts`
-- Frontend contract checks passed locally:
-  - `cd frontend && npm run test`
-  - `cd frontend && npm run build`
-- Docker compose config validation passed:
-  - `docker compose -f docker/docker-compose.yml config`
-- Rust core tests passed locally:
-  - `cargo test -p sao-core`
-- Note (Windows local toolchain): full `cargo test --workspace` currently fails without OpenSSL toolchain for `sao-server`; Linux CI remains the source of truth for full workspace/server verification.
+Notes:
+
+- Bicep validation was performed locally with `az bicep build`.
+- Compose validation used a local development-only password supplied at runtime.

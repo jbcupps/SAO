@@ -328,16 +328,6 @@ pub async fn list_pending_bindings(
     .await
 }
 
-pub async fn get_binding(
-    pool: &PgPool,
-    id: Uuid,
-) -> Result<Option<AgentSkillBindingRow>, sqlx::Error> {
-    sqlx::query_as::<_, AgentSkillBindingRow>("SELECT * FROM agent_skill_bindings WHERE id = $1")
-        .bind(id)
-        .fetch_optional(pool)
-        .await
-}
-
 pub async fn update_binding_status(
     pool: &PgPool,
     id: Uuid,
@@ -360,28 +350,32 @@ pub async fn update_binding_status(
 
 // --- Review CRUD ---
 
+pub struct NewSkillReview {
+    pub target_type: String,
+    pub target_id: Uuid,
+    pub action: String,
+    pub reviewer_user_id: Option<Uuid>,
+    pub policy_score: Option<i32>,
+    pub policy_details: Option<serde_json::Value>,
+    pub notes: Option<String>,
+}
+
 pub async fn insert_review(
     pool: &PgPool,
-    target_type: &str,
-    target_id: Uuid,
-    action: &str,
-    reviewer_user_id: Option<Uuid>,
-    policy_score: Option<i32>,
-    policy_details: Option<serde_json::Value>,
-    notes: Option<&str>,
+    review: NewSkillReview,
 ) -> Result<i64, sqlx::Error> {
     let row: (i64,) = sqlx::query_as(
         "INSERT INTO skill_reviews \
          (target_type, target_id, action, reviewer_user_id, policy_score, policy_details, notes) \
          VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
     )
-    .bind(target_type)
-    .bind(target_id)
-    .bind(action)
-    .bind(reviewer_user_id)
-    .bind(policy_score)
-    .bind(policy_details)
-    .bind(notes)
+    .bind(review.target_type)
+    .bind(review.target_id)
+    .bind(review.action)
+    .bind(review.reviewer_user_id)
+    .bind(review.policy_score)
+    .bind(review.policy_details)
+    .bind(review.notes)
     .fetch_one(pool)
     .await?;
     Ok(row.0)
@@ -401,16 +395,3 @@ pub async fn list_reviews_for_target(
     .await
 }
 
-pub async fn count_pending_reviews(pool: &PgPool) -> Result<i64, sqlx::Error> {
-    let catalog_count: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM skill_catalog WHERE status = 'pending_review'")
-            .fetch_one(pool)
-            .await?;
-
-    let binding_count: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM agent_skill_bindings WHERE status = 'pending_review'")
-            .fetch_one(pool)
-            .await?;
-
-    Ok(catalog_count.0 + binding_count.0)
-}

@@ -1,17 +1,18 @@
 use axum::{
-    extract::{Path, Query, State},
-    http::StatusCode,
-    response::Redirect,
+    extract::{Extension, Path, Query, State},
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Redirect},
     routing::get,
     Json, Router,
 };
-use chrono::{Duration, Utc};
-use serde::Deserialize;
-use serde_json::{json, Value};
-use uuid::Uuid;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use crate::auth::session;
+use crate::security::RequestAuditContext;
 use crate::state::AppState;
+
+const ENV_PROVIDER_ID: &str = "entra";
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -20,104 +21,67 @@ pub fn routes() -> Router<AppState> {
         .route("/api/auth/oidc/callback", get(callback))
 }
 
-/// List enabled OIDC providers (public, for login page).
-async fn list_providers(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
+#[derive(Debug, Clone)]
+struct ResolvedProvider {
+    key: String,
+    display_name: String,
+    config: crate::auth::oidc::OidcProviderConfig,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PublicProvider {
+    id: String,
+    name: String,
+    enabled: bool,
+}
+
+async fn list_providers(State(state): State<AppState>) -> impl IntoResponse {
+    let mut providers = Vec::<PublicProvider>::new();
+    if let Some(provider) = env_provider() {
+        providers.push(PublicProvider {
+            id: provider.key,
+            name: provider.display_name,
+            enabled: true,
+        });
+    }
+
     match crate::db::oidc::list_providers_public(&state.inner.db).await {
-        Ok(providers) => (StatusCode::OK, Json(json!({ "providers": providers }))),
+        Ok(db_providers) => {
+            providers.extend(db_providers.into_iter().map(|provider| PublicProvider {
+                id: provider.id.to_string(),
+                name: provider.name,
+                enabled: provider.enabled,
+            }));
+            (StatusCode::OK, Json(json!({ "providers": providers }))).into_response()
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": e.to_string() })),
-        ),
+        )
+            .into_response(),
     }
 }
 
-/// Redirect to OIDC provider's authorization endpoint.
 async fn authorize(
     State(state): State<AppState>,
-    Path(provider_id): Path<Uuid>,
-) -> Result<Redirect, (StatusCode, Json<Value>)> {
-    let provider = crate::db::oidc::get_provider(&state.inner.db, provider_id)
+    Path(provider_id): Path<String>,
+) -> Result<Redirect, (StatusCode, Json<serde_json::Value>)> {
+    let provider = resolve_provider(&state, &provider_id).await?;
+    let redirect_url = oidc_redirect_url(&state);
+    let result = crate::auth::oidc::start_authorization(&provider.config, &redirect_url)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": e.to_string() })),
-            )
-        })?
-        .ok_or((
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": "Provider not found" })),
-        ))?;
+        .map_err(internal_error)?;
 
-    if !provider.enabled {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "Provider is disabled" })),
-        ));
-    }
-
-    // Decrypt client secret if present
-    let client_secret = if let Some(ref encrypted) = provider.client_secret_encrypted {
-        let vs = state.inner.vault_state.read().await;
-        if let Some(vmk) = vs.vmk() {
-            if encrypted.len() > 12 {
-                let (ct, nonce) = encrypted.split_at(encrypted.len() - 12);
-                vmk.decrypt(ct, nonce)
-                    .ok()
-                    .and_then(|b| String::from_utf8(b).ok())
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    let rp_origin =
-        std::env::var("SAO_RP_ORIGIN").unwrap_or_else(|_| "http://localhost:3100".to_string());
-    let redirect_url = format!("{}/api/auth/oidc/callback", rp_origin);
-
-    let config = crate::auth::oidc::OidcProviderConfig {
-        id: provider.id,
-        name: provider.name,
-        issuer_url: provider.issuer_url,
-        client_id: provider.client_id,
-        client_secret,
-        scopes: provider.scopes,
-    };
-
-    let result = crate::auth::oidc::start_authorization(&config, &redirect_url)
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": e })),
-            )
-        })?;
-
-    // Store CSRF state in DB as a challenge
-    let state_json = json!({
-        "provider_id": provider_id,
-        "csrf": result.csrf_token.secret(),
-        "nonce": result.nonce.secret(),
-    });
-
-    crate::db::webauthn::store_challenge(
-        &state.inner.db,
-        result.csrf_token.secret(),
-        state_json,
-        "oidc",
-        None,
-    )
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": format!("Failed to persist OIDC state: {}", e) })),
+    state
+        .inner
+        .security
+        .challenge_store
+        .insert_oidc_state(
+            result.csrf_token.secret().to_string(),
+            provider.key,
+            result.nonce.secret().to_string(),
         )
-    })?;
+        .await;
 
     Ok(Redirect::temporary(result.auth_url.as_str()))
 }
@@ -128,59 +92,150 @@ struct CallbackQuery {
     state: String,
 }
 
-/// Handle OIDC callback after provider authentication.
 async fn callback(
     State(state): State<AppState>,
+    Extension(context): Extension<RequestAuditContext>,
     Query(query): Query<CallbackQuery>,
-) -> (StatusCode, Json<Value>) {
-    // Retrieve and validate CSRF state
-    let (state_json, _) =
-        match crate::db::webauthn::consume_challenge(&state.inner.db, &query.state).await {
-            Ok(Some(data)) => data,
-            Ok(None) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(json!({ "error": "Invalid or expired OIDC state" })),
-                );
-            }
-            Err(e) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "error": e.to_string() })),
-                );
-            }
-        };
+) -> impl IntoResponse {
+    let Some((provider_key, nonce)) = state
+        .inner
+        .security
+        .challenge_store
+        .consume_oidc_state(&query.state)
+        .await
+    else {
+        return redirect_with_error(&state, "invalid-or-expired-oidc-state");
+    };
 
-    let provider_id: Uuid = match state_json.get("provider_id").and_then(|v| v.as_str()) {
-        Some(id) => match Uuid::parse_str(id) {
-            Ok(u) => u,
-            Err(_) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(json!({ "error": "Invalid provider ID in state" })),
-                );
-            }
-        },
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "Missing provider_id in state" })),
+    let provider = match resolve_provider(&state, &provider_key).await {
+        Ok(provider) => provider,
+        Err((status, body)) => return (status, body).into_response(),
+    };
+
+    let user_info = match crate::auth::oidc::exchange_code(
+        &provider.config,
+        &oidc_redirect_url(&state),
+        &query.code,
+        &nonce,
+    )
+    .await
+    {
+        Ok(info) => info,
+        Err(error) => {
+            tracing::warn!(
+                request_id = %context.request_id,
+                provider = %provider.display_name,
+                error = %error,
+                "OIDC callback failed"
             );
+            return redirect_with_error(&state, "oidc-sign-in-failed");
         }
     };
 
-    // Load provider config
-    let provider = match crate::db::oidc::get_provider(&state.inner.db, provider_id).await {
-        Ok(Some(p)) => p,
-        _ => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "Provider not found" })),
+    let bootstrap_admin = is_bootstrap_admin(&user_info);
+    let user_id = match load_or_create_user(&state, &provider, &user_info, bootstrap_admin).await {
+        Ok(user_id) => user_id,
+        Err(error) => {
+            tracing::error!(
+                request_id = %context.request_id,
+                provider = %provider.display_name,
+                error = %error,
+                "Failed to load or create OIDC user"
             );
+            return redirect_with_error(&state, "oidc-user-provisioning-failed");
         }
     };
 
-    // Decrypt client secret
+    let user = match crate::db::users::get_user_by_id(&state.inner.db, user_id).await {
+        Ok(Some(user)) => user,
+        _ => return redirect_with_error(&state, "oidc-user-provisioning-failed"),
+    };
+
+    let access_token = match session::create_access_token(
+        user.id,
+        &user.username,
+        &user.role,
+        &state.inner.jwt_secret,
+    ) {
+        Ok(token) => token,
+        Err(_) => return redirect_with_error(&state, "oidc-session-creation-failed"),
+    };
+    let refresh_token = session::generate_refresh_token();
+    let refresh_hash = session::hash_refresh_token(&refresh_token);
+    if crate::db::sessions::store_refresh_token(
+        &state.inner.db,
+        user.id,
+        &refresh_hash,
+        session::refresh_token_expires_at(),
+    )
+    .await
+    .is_err()
+    {
+        return redirect_with_error(&state, "oidc-session-creation-failed");
+    }
+
+    let _ = crate::db::audit::insert_audit_log(
+        &state.inner.db,
+        Some(user.id),
+        None,
+        "auth.login",
+        Some("oidc"),
+        Some(json!({
+            "provider": provider.display_name,
+            "request_id": context.request_id,
+        })),
+        context.client_ip.as_deref(),
+        context.user_agent.as_deref(),
+    )
+    .await;
+
+    let mut headers = HeaderMap::new();
+    session::append_session_cookies(
+        &mut headers,
+        &state.inner.security.cookie_config,
+        &access_token,
+        &refresh_token,
+    );
+    let location = format!("{}/", state.inner.security.frontend_origin());
+    if let Ok(value) = axum::http::HeaderValue::from_str(&location) {
+        headers.insert(axum::http::header::LOCATION, value);
+    }
+    (StatusCode::SEE_OTHER, headers).into_response()
+}
+
+async fn resolve_provider(
+    state: &AppState,
+    provider_key: &str,
+) -> Result<ResolvedProvider, (StatusCode, Json<serde_json::Value>)> {
+    if provider_key == ENV_PROVIDER_ID {
+        return env_provider().ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "OIDC provider not configured" })),
+            )
+        });
+    }
+
+    let provider_id = uuid::Uuid::parse_str(provider_key).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Invalid provider identifier" })),
+        )
+    })?;
+    let provider = crate::db::oidc::get_provider(&state.inner.db, provider_id)
+        .await
+        .map_err(internal_error)?
+        .ok_or((
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "Provider not found" })),
+        ))?;
+    if !provider.enabled {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Provider is disabled" })),
+        ));
+    }
+
     let client_secret = if let Some(ref encrypted) = provider.client_secret_encrypted {
         let vs = state.inner.vault_state.read().await;
         if let Some(vmk) = vs.vmk() {
@@ -188,201 +243,150 @@ async fn callback(
                 let (ct, nonce) = encrypted.split_at(encrypted.len() - 12);
                 vmk.decrypt(ct, nonce)
                     .ok()
-                    .and_then(|b| String::from_utf8(b).ok())
+                    .and_then(|bytes| String::from_utf8(bytes).ok())
             } else {
                 None
             }
         } else {
-            None
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "error": "Vault must be unsealed to use database-backed OIDC providers" })),
+            ));
         }
     } else {
         None
     };
 
-    let rp_origin =
-        std::env::var("SAO_RP_ORIGIN").unwrap_or_else(|_| "http://localhost:3100".to_string());
-    let redirect_url = format!("{}/api/auth/oidc/callback", rp_origin);
+    Ok(ResolvedProvider {
+        key: provider.id.to_string(),
+        display_name: provider.name.clone(),
+        config: crate::auth::oidc::OidcProviderConfig {
+            id: provider.id,
+            name: provider.name,
+            issuer_url: provider.issuer_url,
+            client_id: provider.client_id,
+            client_secret,
+            scopes: provider.scopes,
+        },
+    })
+}
 
-    let config = crate::auth::oidc::OidcProviderConfig {
-        id: provider.id,
-        name: provider.name.clone(),
-        issuer_url: provider.issuer_url,
-        client_id: provider.client_id,
-        client_secret,
-        scopes: provider.scopes,
+fn env_provider() -> Option<ResolvedProvider> {
+    let issuer_url = std::env::var("SAO_OIDC_ISSUER_URL").ok()?;
+    let client_id = std::env::var("SAO_OIDC_CLIENT_ID").ok()?;
+    let client_secret = std::env::var("SAO_OIDC_CLIENT_SECRET")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    let name = std::env::var("SAO_OIDC_PROVIDER_NAME")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "Microsoft Entra ID".to_string());
+    let scopes = std::env::var("SAO_OIDC_SCOPES")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "openid profile email".to_string());
+
+    Some(ResolvedProvider {
+        key: ENV_PROVIDER_ID.to_string(),
+        display_name: name.clone(),
+        config: crate::auth::oidc::OidcProviderConfig {
+            id: uuid::Uuid::nil(),
+            name,
+            issuer_url,
+            client_id,
+            client_secret,
+            scopes,
+        },
+    })
+}
+
+async fn load_or_create_user(
+    state: &AppState,
+    provider: &ResolvedProvider,
+    user_info: &crate::auth::oidc::OidcUserInfo,
+    bootstrap_admin: bool,
+) -> Result<uuid::Uuid, String> {
+    if provider.key != ENV_PROVIDER_ID {
+        if let Ok(provider_id) = uuid::Uuid::parse_str(&provider.key) {
+            if let Some(uid) =
+                crate::db::oidc::find_user_by_oidc(&state.inner.db, provider_id, &user_info.subject)
+                .await
+                .map_err(|e| e.to_string())?
+            {
+                if bootstrap_admin {
+                    crate::db::users::update_user_role(&state.inner.db, uid, "admin")
+                        .await
+                        .map_err(|e| e.to_string())?;
+                }
+                return Ok(uid);
+            }
+        }
+    }
+
+    let username = user_info.email.as_deref().unwrap_or(&user_info.subject);
+    let display_name = user_info.name.as_deref().or(user_info.email.as_deref());
+    let existing_user = crate::db::users::get_user_by_username(&state.inner.db, username)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let user_id = if let Some(existing_user) = existing_user {
+        if bootstrap_admin && existing_user.role != "admin" {
+            crate::db::users::update_user_role(&state.inner.db, existing_user.id, "admin")
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        existing_user.id
+    } else {
+        crate::db::users::create_user(
+            &state.inner.db,
+            username,
+            display_name,
+            if bootstrap_admin { "admin" } else { "user" },
+        )
+        .await
+        .map_err(|e| e.to_string())?
     };
 
-    // Exchange code for tokens
-    let user_info =
-        match crate::auth::oidc::exchange_code(&config, &redirect_url, &query.code).await {
-            Ok(info) => info,
-            Err(e) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "error": e })),
-                );
-            }
-        };
-
-    // Find or create user
-    let bootstrap_admin = is_bootstrap_admin(&user_info);
-
-    let user_id = match crate::db::oidc::find_user_by_oidc(
-        &state.inner.db,
-        provider_id,
-        &user_info.subject,
-    )
-    .await
-    {
-        Ok(Some(uid)) => uid,
-        Ok(None) => {
-            let username = user_info.email.as_deref().unwrap_or(&user_info.subject);
-            let display_name = user_info.name.as_deref().or(user_info.email.as_deref());
-            let role = if bootstrap_admin { "admin" } else { "user" };
-
-            let existing_user =
-                match crate::db::users::get_user_by_username(&state.inner.db, username).await {
-                    Ok(user) => user,
-                    Err(e) => {
-                        return (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(json!({ "error": format!("Failed to look up user: {}", e) })),
-                        );
-                    }
-                };
-
-            let uid = if let Some(existing_user) = existing_user {
-                if bootstrap_admin && existing_user.role != "admin" {
-                    if let Err(e) = crate::db::users::update_user_role(
-                        &state.inner.db,
-                        existing_user.id,
-                        "admin",
-                    )
-                    .await
-                    {
-                        return (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(
-                                json!({ "error": format!("Failed to promote bootstrap admin: {}", e) }),
-                            ),
-                        );
-                    }
-                }
-
-                existing_user.id
-            } else {
-                match crate::db::users::create_user(&state.inner.db, username, display_name, role)
-                    .await
-                {
-                    Ok(id) => id,
-                    Err(e) => {
-                        return (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(json!({ "error": format!("Failed to create user: {}", e) })),
-                        );
-                    }
-                }
-            };
-
-            // Link OIDC identity
-            if let Err(e) = crate::db::oidc::link_user_to_oidc(
+    if provider.key != ENV_PROVIDER_ID {
+        if let Ok(provider_id) = uuid::Uuid::parse_str(&provider.key) {
+            let _ = crate::db::oidc::link_user_to_oidc(
                 &state.inner.db,
-                uid,
+                user_id,
                 provider_id,
                 &user_info.subject,
                 user_info.email.as_deref(),
             )
-            .await
-            {
-                tracing::error!("Failed to link OIDC identity: {}", e);
-            }
-
-            uid
-        }
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": e.to_string() })),
-            );
-        }
-    };
-
-    // Load user for JWT
-    if bootstrap_admin {
-        if let Err(e) = crate::db::users::update_user_role(&state.inner.db, user_id, "admin").await
-        {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": format!("Failed to promote bootstrap admin: {}", e) })),
-            );
+            .await;
         }
     }
 
-    let user = match crate::db::users::get_user_by_id(&state.inner.db, user_id).await {
-        Ok(Some(u)) => u,
-        _ => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "User not found after OIDC link" })),
-            );
-        }
-    };
+    if bootstrap_admin {
+        let _ = crate::db::users::update_user_role(&state.inner.db, user_id, "admin").await;
+    }
 
-    // Issue JWT
-    let access_token = match session::create_access_token(
-        user.id,
-        &user.username,
-        &user.role,
-        &state.inner.jwt_secret,
-    ) {
-        Ok(t) => t,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": format!("Failed to create token: {}", e) })),
-            );
-        }
-    };
+    Ok(user_id)
+}
 
-    let refresh_token = session::generate_refresh_token();
-    let refresh_hash = session::hash_refresh_token(&refresh_token);
-    let refresh_expires = Utc::now() + Duration::days(7);
-
-    let _ = crate::db::sessions::store_refresh_token(
-        &state.inner.db,
-        user.id,
-        &refresh_hash,
-        refresh_expires,
+fn oidc_redirect_url(state: &AppState) -> String {
+    format!(
+        "{}/api/auth/oidc/callback",
+        state.inner.security.frontend_origin()
     )
-    .await;
+}
 
-    // Audit log
-    let _ = crate::db::audit::insert_audit_log(
-        &state.inner.db,
-        Some(user.id),
-        None,
-        "auth.login",
-        Some("oidc"),
-        Some(json!({ "provider": provider.name })),
-        None,
-        None,
-    )
-    .await;
+fn redirect_with_error(state: &AppState, error_code: &str) -> axum::response::Response {
+    let location = format!(
+        "{}/login?error={}",
+        state.inner.security.frontend_origin(),
+        url::form_urlencoded::byte_serialize(error_code.as_bytes()).collect::<String>()
+    );
+    Redirect::to(&location).into_response()
+}
 
+fn internal_error(error: impl std::fmt::Display) -> (StatusCode, Json<serde_json::Value>) {
     (
-        StatusCode::OK,
-        Json(json!({
-            "access_token": access_token,
-            "refresh_token": refresh_token,
-            "token_type": "Bearer",
-            "expires_in": 1800,
-            "user": {
-                "id": user.id,
-                "username": user.username,
-                "display_name": user.display_name,
-                "role": user.role,
-            },
-        })),
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({ "error": error.to_string() })),
     )
 }
 
@@ -402,7 +406,7 @@ fn is_bootstrap_admin(user_info: &crate::auth::oidc::OidcUserInfo) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::is_bootstrap_admin;
+    use super::{env_provider, is_bootstrap_admin, ENV_PROVIDER_ID};
 
     #[test]
     fn bootstrap_admin_matches_entra_oid_claim() {
@@ -418,5 +422,21 @@ mod tests {
         };
 
         assert!(is_bootstrap_admin(&user));
+    }
+
+    #[test]
+    fn env_provider_requires_issuer_and_client_id() {
+        unsafe {
+            std::env::remove_var("SAO_OIDC_ISSUER_URL");
+            std::env::remove_var("SAO_OIDC_CLIENT_ID");
+        }
+        assert!(env_provider().is_none());
+
+        unsafe {
+            std::env::set_var("SAO_OIDC_ISSUER_URL", "https://issuer.example.com");
+            std::env::set_var("SAO_OIDC_CLIENT_ID", "client-123");
+        }
+        let provider = env_provider().expect("expected env-backed provider");
+        assert_eq!(provider.key, ENV_PROVIDER_ID);
     }
 }

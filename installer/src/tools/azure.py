@@ -16,6 +16,16 @@ DEFAULT_DEPLOYMENT_NAME = "sao-bootstrap"
 DEFAULT_CONTAINER_APP_NAME = "sao-app"
 DEFAULT_CONTAINER_NAME = "sao"
 DEFAULT_IMAGE_TAG = "latest"
+_OPTIONAL_BICEP_ENV_PARAMETERS = {
+    "SAO_INSTALLER_ALLOWED_ORIGINS": "allowedOrigins",
+    "SAO_INSTALLER_FRONTEND_URL": "publicOrigin",
+    "SAO_INSTALLER_JWT_SECRET": "jwtSecret",
+    "SAO_INSTALLER_OIDC_ISSUER_URL": "oidcIssuerUrl",
+    "SAO_INSTALLER_OIDC_CLIENT_ID": "oidcClientId",
+    "SAO_INSTALLER_OIDC_CLIENT_SECRET": "oidcClientSecret",
+    "SAO_INSTALLER_OIDC_PROVIDER_NAME": "oidcProviderName",
+    "SAO_INSTALLER_OIDC_SCOPES": "oidcScopes",
+}
 _CONTROL_CHARACTERS = re.compile(r"[\r\n\x00]")
 _READ_ONLY_PREFIXES_2 = {
     ("account", "show"),
@@ -300,6 +310,17 @@ def _deployment_group_args(
     normalized_suffix = (name_suffix or "").strip().lower()
     if normalized_suffix:
         args.append(f"nameSuffix={normalized_suffix}")
+    args.extend(_deployment_env_parameter_args())
+    return args
+
+
+def _deployment_env_parameter_args() -> list[str]:
+    """Forward optional secure bootstrap inputs from the installer environment."""
+    args: list[str] = []
+    for env_name, parameter_name in _OPTIONAL_BICEP_ENV_PARAMETERS.items():
+        value = os.environ.get(env_name, "").strip()
+        if value:
+            args.append(f"{parameter_name}={value}")
     return args
 
 

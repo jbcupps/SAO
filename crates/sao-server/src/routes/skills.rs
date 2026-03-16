@@ -119,10 +119,13 @@ async fn list_binding_reviews(
 }
 
 async fn list_agent_skills(
-    _user: AuthUser,
+    user: AuthUser,
     State(state): State<AppState>,
     Path(agent_id): Path<Uuid>,
 ) -> (StatusCode, Json<Value>) {
+    if let Err(response) = ensure_agent_access(&state, &user, agent_id).await {
+        return response;
+    }
     match crate::db::skills::list_bindings_for_agent(&state.inner.db, agent_id).await {
         Ok(bindings) => (StatusCode::OK, Json(json!({ "bindings": bindings }))),
         Err(e) => (
@@ -157,21 +160,8 @@ async fn agent_skill_checkin(
     Path(agent_id): Path<Uuid>,
     Json(req): Json<SkillCheckinRequest>,
 ) -> (StatusCode, Json<Value>) {
-    // Verify agent exists
-    match crate::db::agents::get_agent(&state.inner.db, agent_id).await {
-        Ok(Some(_)) => {}
-        Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "Agent not found" })),
-            );
-        }
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": e.to_string() })),
-            );
-        }
+    if let Err(response) = ensure_agent_access(&state, &user, agent_id).await {
+        return response;
     }
 
     let mut results = Vec::new();
@@ -239,13 +229,17 @@ async fn agent_skill_checkin(
             // Insert review record
             let _ = crate::db::skills::insert_review(
                 &state.inner.db,
-                "catalog",
-                skill.id,
-                review_action,
-                None,
-                Some(policy.score as i32),
-                Some(serde_json::to_value(&policy.checks).unwrap_or(json!([]))),
-                None,
+                crate::db::skills::NewSkillReview {
+                    target_type: "catalog".to_string(),
+                    target_id: skill.id,
+                    action: review_action.to_string(),
+                    reviewer_user_id: None,
+                    policy_score: Some(policy.score as i32),
+                    policy_details: Some(
+                        serde_json::to_value(&policy.checks).unwrap_or(json!([])),
+                    ),
+                    notes: None,
+                },
             )
             .await;
 
@@ -286,15 +280,17 @@ async fn agent_skill_checkin(
             };
             let _ = crate::db::skills::insert_review(
                 &state.inner.db,
-                "binding",
-                binding.id,
-                binding_action,
-                None,
-                policy_result.as_ref().map(|p| p.score as i32),
-                policy_result
-                    .as_ref()
-                    .map(|p| serde_json::to_value(&p.checks).unwrap_or(json!([]))),
-                None,
+                crate::db::skills::NewSkillReview {
+                    target_type: "binding".to_string(),
+                    target_id: binding.id,
+                    action: binding_action.to_string(),
+                    reviewer_user_id: None,
+                    policy_score: policy_result.as_ref().map(|p| p.score as i32),
+                    policy_details: policy_result
+                        .as_ref()
+                        .map(|p| serde_json::to_value(&p.checks).unwrap_or(json!([]))),
+                    notes: None,
+                },
             )
             .await;
         }
@@ -344,6 +340,35 @@ async fn agent_skill_checkin(
     }
 
     (StatusCode::OK, Json(json!({ "results": results })))
+}
+
+async fn ensure_agent_access(
+    state: &AppState,
+    user: &AuthUser,
+    agent_id: Uuid,
+) -> Result<(), (StatusCode, Json<Value>)> {
+    let agent = match crate::db::agents::get_agent(&state.inner.db, agent_id).await {
+        Ok(Some(agent)) => agent,
+        Ok(None) => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "Agent not found" })),
+            ));
+        }
+        Err(e) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            ));
+        }
+    };
+    if !user.is_admin() && agent.owner_user_id != Some(user.user_id) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "Access denied" })),
+        ));
+    }
+    Ok(())
 }
 
 // --- Admin endpoints ---
@@ -412,13 +437,17 @@ async fn admin_create_skill(
         Ok(skill) => {
             let _ = crate::db::skills::insert_review(
                 &state.inner.db,
-                "catalog",
-                skill.id,
-                "manual_approve",
-                Some(admin.user_id),
-                Some(policy.score as i32),
-                Some(serde_json::to_value(&policy.checks).unwrap_or(json!([]))),
-                Some("Admin-created skill, auto-approved"),
+                crate::db::skills::NewSkillReview {
+                    target_type: "catalog".to_string(),
+                    target_id: skill.id,
+                    action: "manual_approve".to_string(),
+                    reviewer_user_id: Some(admin.user_id),
+                    policy_score: Some(policy.score as i32),
+                    policy_details: Some(
+                        serde_json::to_value(&policy.checks).unwrap_or(json!([])),
+                    ),
+                    notes: Some("Admin-created skill, auto-approved".to_string()),
+                },
             )
             .await;
 
@@ -578,13 +607,15 @@ async fn admin_review_skill(
         Ok(true) => {
             let _ = crate::db::skills::insert_review(
                 &state.inner.db,
-                "catalog",
-                id,
-                review_action,
-                Some(admin.user_id),
-                None,
-                None,
-                req.notes.as_deref(),
+                crate::db::skills::NewSkillReview {
+                    target_type: "catalog".to_string(),
+                    target_id: id,
+                    action: review_action.to_string(),
+                    reviewer_user_id: Some(admin.user_id),
+                    policy_score: None,
+                    policy_details: None,
+                    notes: req.notes.clone(),
+                },
             )
             .await;
 
@@ -685,13 +716,15 @@ async fn admin_review_binding(
         Ok(true) => {
             let _ = crate::db::skills::insert_review(
                 &state.inner.db,
-                "binding",
-                id,
-                review_action,
-                Some(admin.user_id),
-                None,
-                None,
-                req.notes.as_deref(),
+                crate::db::skills::NewSkillReview {
+                    target_type: "binding".to_string(),
+                    target_id: id,
+                    action: review_action.to_string(),
+                    reviewer_user_id: Some(admin.user_id),
+                    policy_score: None,
+                    policy_details: None,
+                    notes: req.notes.clone(),
+                },
             )
             .await;
 

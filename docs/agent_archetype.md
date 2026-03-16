@@ -1,26 +1,25 @@
-# Agent Archetype – Soul + Skills Standard
+# Agent Archetype
 
-**Soul** (templates/soul.md)
-- Identity declaration, free-will statement, relationship to mentor/owner/SAO.
-- Must be signed at birth.
+SAO governs agents as owned, reviewable runtime entities.
 
-**Ethics** (templates/ethics.md)
-- TriangleEthic (Deontological + Areteological + Teleological)
-- OCEAN psychometrics
-- Moral Foundations Engine
+## Identity Artifacts
 
-**Org Map** (templates/org-map.md)
-Example for Orion Dock agent:
-- Reports to: SAO registry
-- Permissions: inherited from hive + master-key signature
-- Can spawn sub-agents inside sandbox
+The repo still models agents around durable identity material such as:
 
-**Skills Contract**
-For every skill:
-1. `skills/<name>/` – tool implementation (Rust crate / sandbox / spawned agent)
-2. `skills/<name>/how-to-use.md` – ego-readable playbook (when to use, constraints, success patterns, failure modes)
+- `soul.md`
+- `ethics.md`
+- `org-map.md`
+- `personality.md`
 
-**Birth Ceremony**
-Abigail → local interactive
-Orion → SAO-provisioned (master key signs)
-Both produce identical soul + ethics + org-map artifacts.
+These documents matter because they define the intended trust and behavioral envelope for an agent, even when the operational control plane is handling identity, sessions, and governed skills.
+
+## Skills As Governed Artifacts
+
+Each skill should be treated as a capability package with:
+
+- a clear operational purpose
+- declared permissions
+- reviewable inputs and outputs
+- lifecycle status such as pending review, approved, or deprecated
+
+The `skills/` directory is kept in the repo to illustrate that governance model.

@@ -1,19 +1,19 @@
 use axum::{
     extract::FromRequestParts,
-    http::{header::AUTHORIZATION, request::Parts, StatusCode},
+    http::{header::AUTHORIZATION, request::Parts, HeaderMap, StatusCode},
     Json,
 };
 use serde_json::json;
 use uuid::Uuid;
 
 use crate::auth::session;
+use crate::security::{cookie_value, RequestAuditContext};
 use crate::state::AppState;
 
 /// Authenticated user info extracted from JWT.
 #[derive(Debug, Clone)]
 pub struct AuthUser {
     pub user_id: Uuid,
-    pub username: String,
     pub role: String,
 }
 
@@ -35,18 +35,17 @@ impl FromRequestParts<AppState> for AuthUser {
         let auth_header = parts
             .headers
             .get(AUTHORIZATION)
-            .and_then(|v| v.to_str().ok())
-            .ok_or((
+            .and_then(|v| v.to_str().ok());
+        let token = extract_bearer_or_cookie(auth_header, &parts.headers).ok_or_else(|| {
+            log_auth_failure(parts, "Missing session token");
+            (
                 StatusCode::UNAUTHORIZED,
-                Json(json!({ "error": "Missing Authorization header" })),
-            ))?;
+                Json(json!({ "error": "Authentication required" })),
+            )
+        })?;
 
-        let token = auth_header.strip_prefix("Bearer ").ok_or((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": "Invalid Authorization header format" })),
-        ))?;
-
-        let claims = session::validate_token(token, &state.inner.jwt_secret).map_err(|_| {
+        let claims = session::validate_token(&token, &state.inner.jwt_secret).map_err(|_| {
+            log_auth_failure(parts, "Invalid or expired session token");
             (
                 StatusCode::UNAUTHORIZED,
                 Json(json!({ "error": "Invalid or expired token" })),
@@ -54,6 +53,7 @@ impl FromRequestParts<AppState> for AuthUser {
         })?;
 
         let user_id = Uuid::parse_str(&claims.sub).map_err(|_| {
+            log_auth_failure(parts, "Invalid token subject");
             (
                 StatusCode::UNAUTHORIZED,
                 Json(json!({ "error": "Invalid token subject" })),
@@ -62,7 +62,6 @@ impl FromRequestParts<AppState> for AuthUser {
 
         Ok(AuthUser {
             user_id,
-            username: claims.username,
             role: claims.role,
         })
     }
@@ -82,6 +81,7 @@ impl FromRequestParts<AppState> for AdminUser {
     ) -> Result<Self, Self::Rejection> {
         let user = AuthUser::from_request_parts(parts, state).await?;
         if !user.is_admin() {
+            log_auth_failure(parts, "Administrator access required");
             return Err((
                 StatusCode::FORBIDDEN,
                 Json(json!({ "error": "Administrator access required" })),
@@ -89,4 +89,28 @@ impl FromRequestParts<AppState> for AdminUser {
         }
         Ok(AdminUser(user))
     }
+}
+
+fn extract_bearer_or_cookie<'a>(
+    auth_header: Option<&'a str>,
+    headers: &'a HeaderMap,
+) -> Option<String> {
+    if let Some(auth_header) = auth_header {
+        if let Some(token) = auth_header.strip_prefix("Bearer ") {
+            return Some(token.to_string());
+        }
+    }
+
+    cookie_value(headers, session::ACCESS_COOKIE_NAME)
+}
+
+fn log_auth_failure(parts: &Parts, reason: &str) {
+    let context = parts.extensions.get::<RequestAuditContext>();
+    tracing::warn!(
+        request_id = context.map(|ctx| ctx.request_id.as_str()).unwrap_or("unknown"),
+        client_ip = ?context.and_then(|ctx| ctx.client_ip.as_deref()),
+        user_agent = ?context.and_then(|ctx| ctx.user_agent.as_deref()),
+        reason = reason,
+        "Authentication or authorization failure"
+    );
 }

@@ -1,19 +1,26 @@
-FROM mcr.microsoft.com/azure-cli:latest
+FROM mcr.microsoft.com/azure-cli:2.69.0
 
-RUN tdnf install -y python3-pip && \
-    ln -sf /usr/bin/python3.12 /usr/bin/python && \
-    tdnf clean all
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    VIRTUAL_ENV=/opt/venv \
+    PATH=/opt/venv/bin:$PATH \
+    AZURE_CONFIG_DIR=/home/sao/.azure \
+    HOST_OS=windows
 
-# Python deps
+RUN python3 -m venv "$VIRTUAL_ENV" \
+    && "$VIRTUAL_ENV/bin/pip" install --no-cache-dir --upgrade pip \
+    && useradd --system --create-home --uid 10001 --shell /usr/sbin/nologin sao \
+    && mkdir -p /app /home/sao/.azure \
+    && chown -R sao:sao /app /home/sao
+
 COPY requirements.txt /app/requirements.txt
-RUN python -m pip install --no-cache-dir -r /app/requirements.txt
+RUN "$VIRTUAL_ENV/bin/pip" install --no-cache-dir -r /app/requirements.txt
 
-# Application
 COPY src/ /app/src/
 COPY bicep/ /app/bicep/
 COPY shared/ /app/shared/
 COPY system_prompt.md /app/system_prompt.md
 
 WORKDIR /app
-ENV HOST_OS=windows
+USER sao
 ENTRYPOINT ["python", "src/main.py"]

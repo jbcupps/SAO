@@ -7,7 +7,7 @@ import {
   type ReactNode,
 } from 'react';
 import { createElement } from 'react';
-import type { User, AuthTokens } from '../types';
+import type { User } from '../types';
 import { getMe, logout as apiLogout } from '../api/auth';
 
 interface AuthContextValue {
@@ -15,7 +15,7 @@ interface AuthContextValue {
   isAuthenticated: boolean;
   isAdmin: boolean;
   isLoading: boolean;
-  login: (tokens: AuthTokens) => Promise<void>;
+  login: () => Promise<void>;
   logout: () => Promise<void>;
   setUser: (user: User | null) => void;
 }
@@ -30,18 +30,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const isAdmin = user?.role === 'admin';
 
   const fetchUser = useCallback(async () => {
-    const token = localStorage.getItem('sao_access_token');
-    if (!token) {
-      setIsLoading(false);
-      return;
-    }
-
     try {
       const me = await getMe();
       setUser(me);
     } catch {
-      localStorage.removeItem('sao_access_token');
-      localStorage.removeItem('sao_refresh_token');
       setUser(null);
     } finally {
       setIsLoading(false);
@@ -52,30 +44,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     fetchUser();
   }, [fetchUser]);
 
-  const login = useCallback(async (tokens: AuthTokens) => {
-    localStorage.setItem('sao_access_token', tokens.access_token);
-    localStorage.setItem('sao_refresh_token', tokens.refresh_token);
+  const login = useCallback(async () => {
     try {
       const me = await getMe();
       setUser(me);
     } catch {
-      localStorage.removeItem('sao_access_token');
-      localStorage.removeItem('sao_refresh_token');
       throw new Error('Failed to fetch user after login');
     }
   }, []);
 
   const logout = useCallback(async () => {
-    const refreshToken = localStorage.getItem('sao_refresh_token');
-    if (refreshToken) {
-      try {
-        await apiLogout(refreshToken);
-      } catch {
-        // Ignore logout errors
-      }
+    try {
+      await apiLogout();
+    } catch {
+      // Ignore logout errors
     }
-    localStorage.removeItem('sao_access_token');
-    localStorage.removeItem('sao_refresh_token');
     setUser(null);
   }, []);
 

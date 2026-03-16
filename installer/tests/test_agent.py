@@ -715,7 +715,10 @@ class InstallerAgentTests(unittest.TestCase):
         self.assertIn("ghcr.io/jbcupps/sao:<tag>", prompt)
         self.assertIn("docker/Dockerfile", prompt)
         self.assertIn("installer/Dockerfile", prompt)
-        self.assertIn("Never tell the operator to deploy it as the Azure Container App image".lower(), prompt.lower())
+        self.assertIn(
+            "Never tell the operator to deploy the installer image as the SAO application runtime".lower(),
+            prompt.lower(),
+        )
 
     def test_format_provisioning_failure_message_calls_out_ghcr_visibility(self):
         agent = self._make_agent([])

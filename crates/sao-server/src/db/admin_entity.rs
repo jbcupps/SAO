@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sqlx::{PgPool, Postgres, Transaction};
+use sqlx::PgPool;
 use uuid::Uuid;
 
 const ADMIN_ENTITY_CONFIG_KEY: &str = "sao.admin_entity";
@@ -40,61 +40,6 @@ pub struct AdminWorkItemRow {
 pub struct AdminEntityOverview {
     pub admin_entity: AdminEntitySnapshot,
     pub work_items: Vec<AdminWorkItemRow>,
-}
-
-#[derive(Debug, Clone)]
-pub struct AdminWorkItemSeed<'a> {
-    pub sequence_no: i32,
-    pub slug: &'a str,
-    pub title: &'a str,
-    pub description: &'a str,
-    pub area: &'a str,
-    pub status: &'a str,
-    pub priority: i32,
-    pub metadata: Value,
-}
-
-pub async fn upsert_admin_entity_snapshot(
-    tx: &mut Transaction<'_, Postgres>,
-    snapshot: &AdminEntitySnapshot,
-) -> Result<()> {
-    let value = serde_json::to_value(snapshot)?;
-
-    sqlx::query(
-        "INSERT INTO system_config (key, value) VALUES ($1, $2)
-         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
-    )
-    .bind(ADMIN_ENTITY_CONFIG_KEY)
-    .bind(value)
-    .execute(&mut **tx)
-    .await
-    .context("failed to persist SAO admin entity snapshot")?;
-
-    Ok(())
-}
-
-pub async fn insert_work_item(
-    tx: &mut Transaction<'_, Postgres>,
-    admin_agent_id: Uuid,
-    seed: &AdminWorkItemSeed<'_>,
-) -> Result<AdminWorkItemRow, sqlx::Error> {
-    sqlx::query_as::<_, AdminWorkItemRow>(
-        "INSERT INTO admin_work_items
-         (admin_agent_id, sequence_no, slug, title, description, area, status, priority, metadata)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-         RETURNING *",
-    )
-    .bind(admin_agent_id)
-    .bind(seed.sequence_no)
-    .bind(seed.slug)
-    .bind(seed.title)
-    .bind(seed.description)
-    .bind(seed.area)
-    .bind(seed.status)
-    .bind(seed.priority)
-    .bind(&seed.metadata)
-    .fetch_one(&mut **tx)
-    .await
 }
 
 pub async fn get_admin_entity_snapshot(pool: &PgPool) -> Result<Option<AdminEntitySnapshot>> {

@@ -1,14 +1,14 @@
 mod auth;
 mod db;
 mod routes;
-mod runtime;
+mod security;
 mod state;
 mod vault_state;
-mod ws;
 
 use anyhow::{bail, Context};
 use axum::Router;
-use tower_http::cors::{Any, CorsLayer};
+use axum::middleware;
+use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 use tracing_subscriber::EnvFilter;
 
@@ -62,17 +62,26 @@ async fn run_server() -> anyhow::Result<()> {
         .context("Failed to initialize identity and runtime state")?;
     log_startup_checkpoint("identity_runtime_initialized");
 
-    // Start background runtime scheduler
-    let runtime = app_state.inner.runtime.clone();
-    tokio::spawn(async move {
-        runtime.scheduler_loop().await;
-    });
-
     // Build CORS layer
+    let allowed_origins = state::allowed_origin_values(&app_state);
     let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+        .allow_origin(AllowOrigin::list(allowed_origins))
+        .allow_methods(AllowMethods::list([
+            axum::http::Method::GET,
+            axum::http::Method::POST,
+            axum::http::Method::PUT,
+            axum::http::Method::DELETE,
+            axum::http::Method::OPTIONS,
+        ]))
+        .allow_headers(AllowHeaders::list([
+            axum::http::header::CONTENT_TYPE,
+            axum::http::header::ACCEPT,
+            axum::http::header::COOKIE,
+            axum::http::header::SET_COOKIE,
+            axum::http::HeaderName::from_static(security::CSRF_HEADER),
+            axum::http::HeaderName::from_static(security::REQUEST_ID_HEADER),
+        ]))
+        .allow_credentials(true);
 
     // Static file serving for the React SPA
     let static_dir =
@@ -83,8 +92,11 @@ async fn run_server() -> anyhow::Result<()> {
     // Build the router
     let app = Router::new()
         .merge(routes::routes())
-        .merge(ws::ws_routes())
         .fallback_service(spa_fallback)
+        .layer(middleware::from_fn_with_state(
+            app_state.clone(),
+            security::enforce_request_security,
+        ))
         .layer(cors)
         .with_state(app_state);
 

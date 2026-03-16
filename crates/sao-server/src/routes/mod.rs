@@ -1,10 +1,8 @@
 pub mod admin;
 pub mod agents;
 pub mod auth;
-pub mod ethical;
 pub mod health;
 pub mod oidc;
-pub mod runtime;
 pub mod setup;
 pub mod skills;
 pub mod vault;
@@ -19,11 +17,9 @@ pub fn routes() -> Router<AppState> {
         .merge(setup::routes())
         .merge(auth::routes())
         .merge(oidc::routes())
-        .merge(runtime::routes())
         // Protected routes (auth enforced at handler level via extractors)
         .merge(agents::routes())
         .merge(vault::routes())
-        .merge(ethical::routes())
         .merge(admin::routes())
         .merge(skills::routes())
 }

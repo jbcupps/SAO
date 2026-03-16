@@ -7,13 +7,6 @@ export interface User {
   updated_at?: string;
 }
 
-export interface AuthTokens {
-  access_token: string;
-  refresh_token: string;
-  token_type: string;
-  expires_in: number;
-}
-
 export interface VaultSecret {
   id: string;
   secret_type: string;
@@ -80,22 +73,18 @@ export interface SetupStatus {
   initialized: boolean;
   has_users: boolean;
   needs_setup: boolean;
-}
-
-export type FrontierProvider = 'openai' | 'anthropic' | 'google';
-
-export interface BootstrapModelConfig {
-  provider: FrontierProvider;
-  model: string;
-  api_key: string;
-  entity_name?: string;
+  bootstrap_mode?: 'installer_required' | 'operational';
+  recommended_installer?: {
+    command: string;
+    image_role: string;
+  };
 }
 
 export interface AdminEntitySummary {
   id: string;
   identity_agent_id: string;
   name: string;
-  provider: FrontierProvider;
+  provider: string;
   model: string;
   secret_id: string;
   role?: string;
@@ -124,12 +113,6 @@ export interface AdminEntityOverview {
   work_items: AdminWorkItem[];
 }
 
-export interface SetupInitializationResult extends AdminEntityOverview {
-  status: 'initialized';
-  user_id: string;
-  vault_status: 'unsealed';
-}
-
 export interface VaultStatus {
   status: 'uninitialized' | 'sealed' | 'unsealed';
 }
@@ -153,7 +136,7 @@ export interface CreateOidcProviderData {
   name: string;
   issuer_url: string;
   client_id: string;
-  client_secret: string;
+  client_secret?: string;
   scopes: string;
 }
 

@@ -22,6 +22,12 @@ export default function Login() {
   const from = (location.state as { from?: { pathname: string } })?.from?.pathname || '/';
 
   useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const oidcError = params.get('error');
+    if (oidcError) {
+      setError(`Single sign-on failed (${oidcError}). Please try again.`);
+    }
+
     listAuthOidcProviders()
       .then((providers) =>
         setOidcProviders(providers.filter((p) => p.enabled)),
@@ -40,8 +46,8 @@ export default function Login() {
         requestedUsername || undefined,
       );
       const credential = await beginAuthentication(options as never);
-      const tokens = await webauthnLoginFinish(challenge_id, credential);
-      await login(tokens);
+      await webauthnLoginFinish(challenge_id, credential);
+      await login();
       navigate(from, { replace: true });
     } catch (err) {
       setError(

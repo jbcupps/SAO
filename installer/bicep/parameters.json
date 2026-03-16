@@ -2,26 +2,41 @@
   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
   "contentVersion": "1.0.0.0",
   "parameters": {
-    "baseName": {
-      "value": "sao"
-    },
     "location": {
       "value": "eastus2"
     },
-    "postgresAdminLogin": {
+    "adminOid": {
       "value": ""
     },
-    "postgresAdminPassword": {
-      "value": ""
-    },
-    "saoContainerImage": {
+    "saoImage": {
       "value": "ghcr.io/jbcupps/sao:latest"
     },
-    "entraTenantId": {
+    "nameSuffix": {
       "value": ""
     },
-    "entraClientId": {
+    "publicOrigin": {
       "value": ""
+    },
+    "allowedOrigins": {
+      "value": ""
+    },
+    "jwtSecret": {
+      "value": ""
+    },
+    "oidcIssuerUrl": {
+      "value": ""
+    },
+    "oidcClientId": {
+      "value": ""
+    },
+    "oidcClientSecret": {
+      "value": ""
+    },
+    "oidcProviderName": {
+      "value": "Microsoft Entra ID"
+    },
+    "oidcScopes": {
+      "value": "openid profile email"
     }
   }
 }

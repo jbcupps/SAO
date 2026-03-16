@@ -16,6 +16,9 @@ target/
 __pycache__/
 *.pyc
 
+# Generated IaC artifacts
+installer/bicep/main.json
+
 # Node / Frontend
 node_modules/
 frontend/dist/

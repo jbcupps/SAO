@@ -1,10 +1,20 @@
 use chrono::{Duration, Utc};
+use axum::http::HeaderMap;
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use uuid::Uuid;
+
+use crate::security::{
+    append_set_cookie, build_cookie, build_expired_cookie, CookieConfig,
+};
+
+pub const ACCESS_COOKIE_NAME: &str = "sao_access_token";
+pub const REFRESH_COOKIE_NAME: &str = "sao_refresh_token";
+pub const ACCESS_TOKEN_TTL_MINUTES: i64 = 30;
+pub const REFRESH_TOKEN_TTL_DAYS: i64 = 7;
 
 /// JWT claims for session tokens.
 #[derive(Debug, Serialize, Deserialize)]
@@ -111,7 +121,7 @@ pub fn create_access_token(
         sub: user_id.to_string(),
         username: username.to_string(),
         role: role.to_string(),
-        exp: (now + Duration::minutes(30)).timestamp(),
+        exp: (now + Duration::minutes(ACCESS_TOKEN_TTL_MINUTES)).timestamp(),
         iat: now.timestamp(),
     };
 
@@ -148,4 +158,45 @@ pub fn hash_refresh_token(token: &str) -> String {
     hasher.update(token.as_bytes());
     let result = hasher.finalize();
     base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, result)
+}
+
+pub fn refresh_token_expires_at() -> chrono::DateTime<chrono::Utc> {
+    Utc::now() + Duration::days(REFRESH_TOKEN_TTL_DAYS)
+}
+
+pub fn append_session_cookies(
+    headers: &mut HeaderMap,
+    cookie_config: &CookieConfig,
+    access_token: &str,
+    refresh_token: &str,
+) {
+    append_set_cookie(
+        headers,
+        &build_cookie(
+            ACCESS_COOKIE_NAME,
+            access_token,
+            true,
+            Some(std::time::Duration::from_secs(
+                (ACCESS_TOKEN_TTL_MINUTES * 60) as u64,
+            )),
+            cookie_config,
+        ),
+    );
+    append_set_cookie(
+        headers,
+        &build_cookie(
+            REFRESH_COOKIE_NAME,
+            refresh_token,
+            true,
+            Some(std::time::Duration::from_secs(
+                (REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60) as u64,
+            )),
+            cookie_config,
+        ),
+    );
+}
+
+pub fn append_cleared_session_cookies(headers: &mut HeaderMap, cookie_config: &CookieConfig) {
+    append_set_cookie(headers, &build_expired_cookie(ACCESS_COOKIE_NAME, cookie_config));
+    append_set_cookie(headers, &build_expired_cookie(REFRESH_COOKIE_NAME, cookie_config));
 }

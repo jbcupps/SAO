@@ -25,7 +25,9 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("PRODUCTION_DOCKERFILE: docker/Dockerfile", workflow)
         self.assertIn("docker build -f ${{ env.PRODUCTION_DOCKERFILE }}", workflow)
         self.assertIn("PRODUCTION_DOCKERFILE", workflow)
-        self.assertNotIn("installer/Dockerfile", workflow)
+        self.assertIn("INSTALLER_DOCKERFILE: installer/Dockerfile", workflow)
+        self.assertIn("docker build -f ${{ env.INSTALLER_DOCKERFILE }}", workflow)
+        self.assertIn("ghcr.io/jbcupps/sao-installer", workflow)
         self.assertNotIn("docker/Dockerfile.sao", workflow)
 
 

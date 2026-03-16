@@ -4,7 +4,7 @@ import { setupStatus } from './api/auth';
 import { useAuth } from './hooks/useAuth';
 import Layout from './components/Layout';
 import ProtectedRoute from './components/ProtectedRoute';
-import SetupWizard from './pages/SetupWizard';
+import BootstrapRequiredPage from './pages/BootstrapRequiredPage';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import VaultPage from './pages/VaultPage';
@@ -38,15 +38,16 @@ function AppRoutes() {
   if (status?.needs_setup) {
     return (
       <Routes>
-        <Route path="/setup" element={<SetupWizard />} />
-        <Route path="*" element={<Navigate to="/setup" replace />} />
+        <Route
+          path="*"
+          element={<BootstrapRequiredPage status={status} />}
+        />
       </Routes>
     );
   }
 
   return (
     <Routes>
-      <Route path="/setup" element={<Navigate to="/" replace />} />
       <Route path="/login" element={
         isAuthenticated ? <Navigate to="/" replace /> : <Login />
       } />

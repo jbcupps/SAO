@@ -2,6 +2,8 @@ param location string
 param serverName string
 @secure()
 param adminPassword string
+param delegatedSubnetId string
+param privateDnsZoneId string
 
 resource pgServer 'Microsoft.DBforPostgreSQL/flexibleServers@2023-12-01-preview' = {
   name: serverName
@@ -12,10 +14,18 @@ resource pgServer 'Microsoft.DBforPostgreSQL/flexibleServers@2023-12-01-preview'
   }
   properties: {
     version: '16'
-    storage: { storageSizeGB: 32 }
+    storage: {
+      storageSizeGB: 32
+    }
     administratorLogin: 'saoadmin'
     administratorLoginPassword: adminPassword
-    highAvailability: { mode: 'Disabled' }
+    highAvailability: {
+      mode: 'Disabled'
+    }
+    network: {
+      delegatedSubnetResourceId: delegatedSubnetId
+      privateDnsZoneArmResourceId: privateDnsZoneId
+    }
   }
 }
 
@@ -32,15 +42,6 @@ resource pgDatabase 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2023-12
   parent: pgServer
   name: 'sao'
   properties: { charset: 'UTF8', collation: 'en_US.utf8' }
-}
-
-resource pgFirewall 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2023-12-01-preview' = {
-  parent: pgServer
-  name: 'AllowAzureServices'
-  properties: {
-    startIpAddress: '0.0.0.0'
-    endIpAddress: '0.0.0.0'
-  }
 }
 
 output serverFqdn string = pgServer.properties.fullyQualifiedDomainName

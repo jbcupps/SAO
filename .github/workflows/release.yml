@@ -10,7 +10,9 @@ on:
 env:
   VERSION: ${{ github.event.inputs.version }}
   PRODUCTION_IMAGE_NAME: ghcr.io/jbcupps/sao
+  INSTALLER_IMAGE_NAME: ghcr.io/jbcupps/sao-installer
   PRODUCTION_DOCKERFILE: docker/Dockerfile
+  INSTALLER_DOCKERFILE: installer/Dockerfile
 
 jobs:
   create-release:
@@ -108,40 +110,24 @@ jobs:
       - name: Build production Docker image
         run: docker build -f ${{ env.PRODUCTION_DOCKERFILE }} -t ${{ env.PRODUCTION_IMAGE_NAME }}:${{ env.VERSION }} .
 
+      - name: Build installer Docker image
+        run: docker build -f ${{ env.INSTALLER_DOCKERFILE }} -t ${{ env.INSTALLER_IMAGE_NAME }}:${{ env.VERSION }} installer
+
       - name: Tag as latest
-        run: docker tag ${{ env.PRODUCTION_IMAGE_NAME }}:${{ env.VERSION }} ${{ env.PRODUCTION_IMAGE_NAME }}:latest
+        run: |
+          docker tag ${{ env.PRODUCTION_IMAGE_NAME }}:${{ env.VERSION }} ${{ env.PRODUCTION_IMAGE_NAME }}:latest
+          docker tag ${{ env.INSTALLER_IMAGE_NAME }}:${{ env.VERSION }} ${{ env.INSTALLER_IMAGE_NAME }}:latest
 
       - name: Push images
         run: |
           docker push ${{ env.PRODUCTION_IMAGE_NAME }}:${{ env.VERSION }}
           docker push ${{ env.PRODUCTION_IMAGE_NAME }}:latest
-
-  publish-npm:
-    name: Publish npm Package
-    needs: build-binaries
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          registry-url: "https://registry.npmjs.org"
-
-      - name: Update package version
-        working-directory: npm-package
-        run: npm version "${{ env.VERSION }}" --no-git-tag-version
-
-      - name: Publish to npm
-        working-directory: npm-package
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --access public
+          docker push ${{ env.INSTALLER_IMAGE_NAME }}:${{ env.VERSION }}
+          docker push ${{ env.INSTALLER_IMAGE_NAME }}:latest
 
   finalize-release:
     name: Finalize Release
-    needs: [build-binaries, publish-docker, publish-npm]
+    needs: [build-binaries, publish-docker]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

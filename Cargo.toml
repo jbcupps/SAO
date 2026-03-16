@@ -36,7 +36,7 @@ argon2 = "0.5"
 sha2 = "0.10"
 zeroize = { version = "1", features = ["derive"] }
 jsonwebtoken = "9"
-webauthn-rs = { version = "0.5", features = ["danger-allow-state-serialisation"] }
+webauthn-rs = "0.5"
 webauthn-rs-proto = "0.5"
 openidconnect = { version = "4", default-features = false, features = ["reqwest", "rustls-tls"] }
 url = "2"

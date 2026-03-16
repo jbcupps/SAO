@@ -1,32 +1,12 @@
 import { apiRequest } from './client';
 import type {
-  AuthTokens,
-  BootstrapModelConfig,
   OidcProvider,
-  SetupInitializationResult,
   SetupStatus,
   User,
 } from '../types';
 
 export async function setupStatus(): Promise<SetupStatus> {
   return apiRequest<SetupStatus>('/api/setup/status');
-}
-
-export async function initializeVault(
-  passphrase: string,
-  admin_username: string,
-  bootstrap_model: BootstrapModelConfig,
-  admin_display_name?: string,
-): Promise<SetupInitializationResult> {
-  return apiRequest<SetupInitializationResult>('/api/setup/initialize', {
-    method: 'POST',
-    body: JSON.stringify({
-      passphrase,
-      admin_username,
-      admin_display_name: admin_display_name || admin_username,
-      bootstrap_model,
-    }),
-  });
 }
 
 export async function webauthnRegisterStart(
@@ -45,11 +25,14 @@ export async function webauthnRegisterStart(
 export async function webauthnRegisterFinish(
   challenge_id: string,
   credential: unknown,
-): Promise<AuthTokens> {
-  return apiRequest<AuthTokens>('/api/auth/webauthn/register/finish', {
-    method: 'POST',
-    body: JSON.stringify({ challenge_id, credential }),
-  });
+): Promise<{ status: string; credential_id: string }> {
+  return apiRequest<{ status: string; credential_id: string }>(
+    '/api/auth/webauthn/register/finish',
+    {
+      method: 'POST',
+      body: JSON.stringify({ challenge_id, credential }),
+    },
+  );
 }
 
 export async function webauthnLoginStart(
@@ -68,26 +51,19 @@ export async function webauthnLoginStart(
 export async function webauthnLoginFinish(
   challenge_id: string,
   credential: unknown,
-): Promise<AuthTokens> {
-  return apiRequest<AuthTokens>('/api/auth/webauthn/login/finish', {
-    method: 'POST',
-    body: JSON.stringify({ challenge_id, credential }),
-  });
+): Promise<{ authenticated: boolean; user: User }> {
+  return apiRequest<{ authenticated: boolean; user: User }>(
+    '/api/auth/webauthn/login/finish',
+    {
+      method: 'POST',
+      body: JSON.stringify({ challenge_id, credential }),
+    },
+  );
 }
 
-export async function refreshToken(
-  refresh_token: string,
-): Promise<AuthTokens> {
-  return apiRequest<AuthTokens>('/api/auth/refresh', {
-    method: 'POST',
-    body: JSON.stringify({ refresh_token }),
-  });
-}
-
-export async function logout(refresh_token: string): Promise<void> {
+export async function logout(): Promise<void> {
   return apiRequest<void>('/api/auth/logout', {
     method: 'POST',
-    body: JSON.stringify({ refresh_token }),
   });
 }
 

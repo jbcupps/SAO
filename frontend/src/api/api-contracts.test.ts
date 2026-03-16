@@ -29,16 +29,8 @@ describe('frontend api contract adapters', () => {
   beforeEach(() => {
     fetchMock.mockReset();
     vi.stubGlobal('fetch', fetchMock);
-    const storage = new Map<string, string>();
-    vi.stubGlobal('localStorage', {
-      getItem: (key: string) => storage.get(key) ?? null,
-      setItem: (key: string, value: string) => storage.set(key, value),
-      removeItem: (key: string) => storage.delete(key),
-      clear: () => storage.clear(),
-      key: (index: number) => Array.from(storage.keys())[index] ?? null,
-      get length() {
-        return storage.size;
-      },
+    vi.stubGlobal('document', {
+      cookie: 'sao_csrf=test-csrf-token',
     });
   });
 
@@ -56,7 +48,10 @@ describe('frontend api contract adapters', () => {
     expect(users[0].username).toBe('alice');
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/admin/users',
-      expect.objectContaining({ headers: expect.any(Object) }),
+      expect.objectContaining({
+        headers: expect.any(Object),
+        credentials: 'include',
+      }),
     );
   });
 
@@ -69,7 +64,10 @@ describe('frontend api contract adapters', () => {
     expect(secrets).toHaveLength(1);
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/vault/secrets',
-      expect.objectContaining({ headers: expect.any(Object) }),
+      expect.objectContaining({
+        headers: expect.any(Object),
+        credentials: 'include',
+      }),
     );
   });
 
@@ -86,7 +84,13 @@ describe('frontend api contract adapters', () => {
     expect(result.options).toEqual({ challenge: 'abc', rpId: 'localhost' });
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/auth/webauthn/login/start',
-      expect.objectContaining({ method: 'POST' }),
+      expect.objectContaining({
+        method: 'POST',
+        credentials: 'include',
+        headers: expect.objectContaining({
+          'X-CSRF-Token': 'test-csrf-token',
+        }),
+      }),
     );
   });
 
@@ -103,6 +107,7 @@ describe('frontend api contract adapters', () => {
       '/api/auth/webauthn/login/start',
       expect.objectContaining({
         method: 'POST',
+        credentials: 'include',
         body: JSON.stringify({ username: undefined }),
       }),
     );
@@ -117,7 +122,10 @@ describe('frontend api contract adapters', () => {
     expect(providers).toHaveLength(1);
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/admin/oidc/providers',
-      expect.objectContaining({ headers: expect.any(Object) }),
+      expect.objectContaining({
+        headers: expect.any(Object),
+        credentials: 'include',
+      }),
     );
   });
 
@@ -130,7 +138,10 @@ describe('frontend api contract adapters', () => {
     expect(audit).toHaveLength(1);
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/admin/audit?offset=0&limit=5',
-      expect.objectContaining({ headers: expect.any(Object) }),
+      expect.objectContaining({
+        headers: expect.any(Object),
+        credentials: 'include',
+      }),
     );
   });
 });

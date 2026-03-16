@@ -1,19 +1,31 @@
 # SAO Deep Dive
 
-## Superego Integration – Personality Evolution (added 2026-02-19)
+SAO is best understood as an operating model for governed agents, not just a vault or a dashboard.
 
-**New constitutional document**
-At birth SAO now injects four files (all signed):
+## What SAO Centralizes
 
-- `soul.md` (immutable, never modified post-birth)
-- `ethics.md` (TriangleEthic commitments)
-- `org-map.md` (hive/role)
-- `personality.md` (ego traits, style, tone – the only file Superego may propose changes to)
+- human operator sign-in and first-admin bootstrap
+- ownership-aware agent registration
+- secret storage and runtime secret handling
+- governed skill registration, review, and binding
+- audit logging for sensitive actions
 
-**Superego provisioning & monitoring surface**
-- SAO exposes new WS endpoint `/ws/superego/{agent_id}` for ego-log streaming.
-- Periodic roll-up jobs are scheduled via SAO cron (configurable per-agent criticality flag).
-- Persistent mode enabled via `criticality: high` in org-map → full conversation stream to Ethical_AI_Reg.
-- All tweak proposals are forwarded through ethical_bridge → Ethical_AI_Reg → back to SAO for personality.md patch + re-sign.
+## What SAO Explicitly Avoids
 
-Soul integrity check remains unchanged: any attempt to modify `soul.md` fails the signature verification at boot.
+- local token persistence in the browser
+- public bootstrap write endpoints
+- unauthenticated experimental runtime surfaces
+- broad network exposure for stateful data services
+
+## Current Hardening Highlights
+
+- cookie-based browser sessions with `HttpOnly`, `Secure`, and `SameSite=Lax`
+- CSRF validation for state-changing browser requests
+- nonce and state verification for OIDC callbacks
+- server-side short-lived challenge storage for WebAuthn and OIDC state
+- request-level rate limiting on auth and other sensitive paths
+- ownership checks for agent CRUD and skill check-in
+
+## Skills
+
+`skills/` remains in the repo as example governed skill material. It is useful for policy, review, and lifecycle examples, but it is not a separate runtime or packaging target.

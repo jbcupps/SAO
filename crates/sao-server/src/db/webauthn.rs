@@ -57,6 +57,7 @@ pub async fn touch_credential(pool: &PgPool, credential_id: &str) -> Result<(), 
 }
 
 /// Store a WebAuthn challenge state (ephemeral).
+#[allow(dead_code)]
 pub async fn store_challenge(
     pool: &PgPool,
     challenge_id: &str,
@@ -84,6 +85,7 @@ pub async fn store_challenge(
 }
 
 /// Retrieve and delete a challenge state (one-time use).
+#[allow(dead_code)]
 pub async fn consume_challenge(
     pool: &PgPool,
     challenge_id: &str,

@@ -82,7 +82,7 @@ pub fn propose_periodic_superego_rollup(agent_id: &str) -> String {
     )
 }
 
-pub fn get_triangleethic_preview(agent_id: &str) -> serde_json::Value {
+pub fn get_triangleethic_preview(_agent_id: &str) -> serde_json::Value {
     json!({
         "deontological": 92,
         "areteological": 87,

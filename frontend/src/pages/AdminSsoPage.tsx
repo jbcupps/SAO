@@ -33,6 +33,7 @@ export default function AdminSsoPage() {
 
   const handleAdd = async () => {
     setError('');
+    const clientSecret = (form.client_secret ?? '').trim();
     if (!form.name.trim()) {
       setError('Provider name is required');
       return;
@@ -45,14 +46,17 @@ export default function AdminSsoPage() {
       setError('Client ID is required');
       return;
     }
-    if (!form.client_secret.trim()) {
+    if (!clientSecret) {
       setError('Client Secret is required');
       return;
     }
 
     setSaving(true);
     try {
-      await createOidcProvider(form);
+      await createOidcProvider({
+        ...form,
+        client_secret: clientSecret,
+      });
       await queryClient.invalidateQueries({ queryKey: ['oidc-providers'] });
       setForm({ ...emptyForm });
       setShowAdd(false);
@@ -174,7 +178,7 @@ export default function AdminSsoPage() {
               </label>
               <input
                 type="password"
-                value={form.client_secret}
+                value={form.client_secret ?? ''}
                 onChange={(e) =>
                   setForm({ ...form, client_secret: e.target.value })
                 }

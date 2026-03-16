@@ -1,16 +1,17 @@
 use axum::{
-    extract::State,
-    http::StatusCode,
+    extract::{Extension, State},
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
-use chrono::{Duration, Utc};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::json;
 use webauthn_rs::prelude::*;
 
 use crate::auth::middleware::AuthUser;
 use crate::auth::session;
+use crate::security::{cookie_value, RequestAuditContext};
 use crate::state::AppState;
 
 pub fn routes() -> Router<AppState> {
@@ -24,8 +25,6 @@ pub fn routes() -> Router<AppState> {
         .route("/api/auth/me", get(me))
 }
 
-// --- Registration ---
-
 #[derive(Deserialize)]
 struct RegisterStartRequest {
     username: String,
@@ -34,9 +33,16 @@ struct RegisterStartRequest {
 async fn register_start(
     State(state): State<AppState>,
     Json(req): Json<RegisterStartRequest>,
-) -> (StatusCode, Json<Value>) {
-    // Look up or fail if user doesn't exist
-    let user = match crate::db::users::get_user_by_username(&state.inner.db, &req.username).await {
+) -> impl IntoResponse {
+    let username = req.username.trim();
+    if username.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Username is required" })),
+        );
+    }
+
+    let user = match crate::db::users::get_user_by_username(&state.inner.db, username).await {
         Ok(Some(u)) => u,
         Ok(None) => {
             return (
@@ -52,7 +58,6 @@ async fn register_start(
         }
     };
 
-    // Get existing credential IDs for exclusion
     let existing_creds =
         match crate::db::webauthn::get_credentials_for_user(&state.inner.db, user.id).await {
             Ok(creds) => creds
@@ -75,24 +80,13 @@ async fn register_start(
         existing_creds,
     ) {
         Ok((challenge, reg_state)) => {
-            // Store challenge state in DB
             let challenge_id = uuid::Uuid::new_v4().to_string();
-            let reg_state_json = serde_json::to_value(&reg_state).unwrap();
-
-            if let Err(e) = crate::db::webauthn::store_challenge(
-                &state.inner.db,
-                &challenge_id,
-                reg_state_json,
-                "registration",
-                Some(user.id),
-            )
-            .await
-            {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "error": e.to_string() })),
-                );
-            }
+            state
+                .inner
+                .security
+                .challenge_store
+                .insert_registration(challenge_id.clone(), user.id, reg_state)
+                .await;
 
             (
                 StatusCode::OK,
@@ -118,43 +112,18 @@ struct RegisterFinishRequest {
 async fn register_finish(
     State(state): State<AppState>,
     Json(req): Json<RegisterFinishRequest>,
-) -> (StatusCode, Json<Value>) {
-    // Retrieve challenge state
-    let (challenge_json, user_id) =
-        match crate::db::webauthn::consume_challenge(&state.inner.db, &req.challenge_id).await {
-            Ok(Some(data)) => data,
-            Ok(None) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(json!({ "error": "Invalid or expired challenge" })),
-                );
-            }
-            Err(e) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "error": e.to_string() })),
-                );
-            }
-        };
-
-    let user_id = match user_id {
-        Some(id) => id,
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "Challenge has no associated user" })),
-            );
-        }
-    };
-
-    let reg_state: PasskeyRegistration = match serde_json::from_value(challenge_json) {
-        Ok(s) => s,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": format!("Invalid challenge state: {}", e) })),
-            );
-        }
+) -> impl IntoResponse {
+    let Some((user_id, reg_state)) = state
+        .inner
+        .security
+        .challenge_store
+        .consume_registration(&req.challenge_id)
+        .await
+    else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Invalid or expired challenge" })),
+        );
     };
 
     match crate::auth::webauthn::finish_registration(
@@ -167,7 +136,15 @@ async fn register_finish(
                 &base64::engine::general_purpose::URL_SAFE_NO_PAD,
                 passkey.cred_id().as_ref(),
             );
-            let cred_json = serde_json::to_value(&passkey).unwrap();
+            let cred_json = match serde_json::to_value(&passkey) {
+                Ok(value) => value,
+                Err(e) => {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({ "error": format!("Failed to encode credential: {}", e) })),
+                    );
+                }
+            };
 
             if let Err(e) = crate::db::webauthn::store_credential(
                 &state.inner.db,
@@ -196,8 +173,6 @@ async fn register_finish(
     }
 }
 
-// --- Authentication ---
-
 #[derive(Deserialize)]
 struct LoginStartRequest {
     username: Option<String>,
@@ -206,7 +181,7 @@ struct LoginStartRequest {
 async fn login_start(
     State(state): State<AppState>,
     Json(req): Json<LoginStartRequest>,
-) -> (StatusCode, Json<Value>) {
+) -> impl IntoResponse {
     let requested_username = req
         .username
         .as_deref()
@@ -260,7 +235,6 @@ async fn login_start(
         }
     };
 
-    // Load user's passkeys
     let cred_rows =
         match crate::db::webauthn::get_credentials_for_user(&state.inner.db, user.id).await {
             Ok(rows) => rows,
@@ -287,22 +261,12 @@ async fn login_start(
     match crate::auth::webauthn::start_authentication(&state.inner.webauthn, passkeys) {
         Ok((challenge, auth_state)) => {
             let challenge_id = uuid::Uuid::new_v4().to_string();
-            let auth_state_json = serde_json::to_value(&auth_state).unwrap();
-
-            if let Err(e) = crate::db::webauthn::store_challenge(
-                &state.inner.db,
-                &challenge_id,
-                auth_state_json,
-                "authentication",
-                Some(user.id),
-            )
-            .await
-            {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "error": e.to_string() })),
-                );
-            }
+            state
+                .inner
+                .security
+                .challenge_store
+                .insert_authentication(challenge_id.clone(), user.id, auth_state)
+                .await;
 
             (
                 StatusCode::OK,
@@ -327,43 +291,21 @@ struct LoginFinishRequest {
 
 async fn login_finish(
     State(state): State<AppState>,
+    Extension(context): Extension<RequestAuditContext>,
     Json(req): Json<LoginFinishRequest>,
-) -> (StatusCode, Json<Value>) {
-    let (challenge_json, user_id) =
-        match crate::db::webauthn::consume_challenge(&state.inner.db, &req.challenge_id).await {
-            Ok(Some(data)) => data,
-            Ok(None) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(json!({ "error": "Invalid or expired challenge" })),
-                );
-            }
-            Err(e) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "error": e.to_string() })),
-                );
-            }
-        };
-
-    let user_id = match user_id {
-        Some(id) => id,
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "Challenge has no associated user" })),
-            );
-        }
-    };
-
-    let auth_state: PasskeyAuthentication = match serde_json::from_value(challenge_json) {
-        Ok(s) => s,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": format!("Invalid challenge state: {}", e) })),
-            );
-        }
+) -> Response {
+    let Some((user_id, auth_state)) = state
+        .inner
+        .security
+        .challenge_store
+        .consume_authentication(&req.challenge_id)
+        .await
+    else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Invalid or expired challenge" })),
+        )
+            .into_response();
     };
 
     match crate::auth::webauthn::finish_authentication(
@@ -371,19 +313,18 @@ async fn login_finish(
         &req.credential,
         &auth_state,
     ) {
-        Ok(_auth_result) => {
-            // Load user for JWT claims
+        Ok(_) => {
             let user = match crate::db::users::get_user_by_id(&state.inner.db, user_id).await {
                 Ok(Some(u)) => u,
                 _ => {
                     return (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(json!({ "error": "User not found" })),
-                    );
+                    )
+                        .into_response();
                 }
             };
 
-            // Create JWT
             let access_token = match session::create_access_token(
                 user.id,
                 &user.username,
@@ -395,110 +336,111 @@ async fn login_finish(
                     return (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(json!({ "error": format!("Failed to create token: {}", e) })),
-                    );
+                    )
+                        .into_response();
                 }
             };
 
-            // Create refresh token
             let refresh_token = session::generate_refresh_token();
             let refresh_hash = session::hash_refresh_token(&refresh_token);
-            let refresh_expires = Utc::now() + Duration::days(7);
-
             if let Err(e) = crate::db::sessions::store_refresh_token(
                 &state.inner.db,
                 user.id,
                 &refresh_hash,
-                refresh_expires,
+                session::refresh_token_expires_at(),
             )
             .await
             {
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(json!({ "error": e.to_string() })),
-                );
+                )
+                    .into_response();
             }
 
-            // Audit log
             let _ = crate::db::audit::insert_audit_log(
                 &state.inner.db,
                 Some(user.id),
                 None,
                 "auth.login",
                 Some("webauthn"),
-                None,
-                None,
-                None,
+                Some(json!({ "request_id": context.request_id })),
+                context.client_ip.as_deref(),
+                context.user_agent.as_deref(),
             )
             .await;
 
-            (
+            authenticated_response(
+                &state,
+                &user,
+                access_token,
+                refresh_token,
                 StatusCode::OK,
-                Json(json!({
-                    "access_token": access_token,
-                    "refresh_token": refresh_token,
-                    "token_type": "Bearer",
-                    "expires_in": 1800,
-                    "user": {
-                        "id": user.id,
-                        "username": user.username,
-                        "display_name": user.display_name,
-                        "role": user.role,
-                    },
-                })),
             )
         }
         Err(e) => (
             StatusCode::UNAUTHORIZED,
             Json(json!({ "error": format!("Authentication failed: {}", e) })),
-        ),
+        )
+            .into_response(),
     }
-}
-
-// --- Token refresh ---
-
-#[derive(Deserialize)]
-struct RefreshRequest {
-    refresh_token: String,
 }
 
 async fn refresh_token(
     State(state): State<AppState>,
-    Json(req): Json<RefreshRequest>,
-) -> (StatusCode, Json<Value>) {
-    let token_hash = session::hash_refresh_token(&req.refresh_token);
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let Some(refresh_token) = cookie_value(&headers, session::REFRESH_COOKIE_NAME) else {
+        let mut response = (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "Refresh session is missing" })),
+        )
+            .into_response();
+        session::append_cleared_session_cookies(
+            response.headers_mut(),
+            &state.inner.security.cookie_config,
+        );
+        return response;
+    };
 
+    let token_hash = session::hash_refresh_token(&refresh_token);
     let user_id =
         match crate::db::sessions::validate_refresh_token(&state.inner.db, &token_hash).await {
             Ok(Some(uid)) => uid,
             Ok(None) => {
-                return (
+                let mut response = (
                     StatusCode::UNAUTHORIZED,
                     Json(json!({ "error": "Invalid or expired refresh token" })),
+                )
+                    .into_response();
+                session::append_cleared_session_cookies(
+                    response.headers_mut(),
+                    &state.inner.security.cookie_config,
                 );
+                return response;
             }
             Err(e) => {
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(json!({ "error": e.to_string() })),
-                );
+                )
+                    .into_response();
             }
         };
 
-    // Revoke old refresh token
     let _ = crate::db::sessions::revoke_refresh_token(&state.inner.db, &token_hash).await;
 
-    // Load user
     let user = match crate::db::users::get_user_by_id(&state.inner.db, user_id).await {
         Ok(Some(u)) => u,
         _ => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({ "error": "User not found" })),
-            );
+            )
+                .into_response();
         }
     };
 
-    // Issue new tokens
     let access_token = match session::create_access_token(
         user.id,
         &user.username,
@@ -510,61 +452,111 @@ async fn refresh_token(
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({ "error": format!("Failed to create token: {}", e) })),
-            );
+            )
+                .into_response();
         }
     };
 
     let new_refresh = session::generate_refresh_token();
     let new_hash = session::hash_refresh_token(&new_refresh);
-    let refresh_expires = Utc::now() + Duration::days(7);
-
     if let Err(e) = crate::db::sessions::store_refresh_token(
         &state.inner.db,
         user.id,
         &new_hash,
-        refresh_expires,
+        session::refresh_token_expires_at(),
     )
     .await
     {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": e.to_string() })),
-        );
+        )
+            .into_response();
     }
+
+    let mut headers = HeaderMap::new();
+    session::append_session_cookies(
+        &mut headers,
+        &state.inner.security.cookie_config,
+        &access_token,
+        &new_refresh,
+    );
 
     (
         StatusCode::OK,
-        Json(json!({
-            "access_token": access_token,
-            "refresh_token": new_refresh,
-            "token_type": "Bearer",
-            "expires_in": 1800,
-        })),
+        headers,
+        Json(json!({ "refreshed": true })),
     )
-}
-
-// --- Logout ---
-
-#[derive(Deserialize)]
-struct LogoutRequest {
-    refresh_token: String,
+        .into_response()
 }
 
 async fn logout(
     State(state): State<AppState>,
-    Json(req): Json<LogoutRequest>,
-) -> (StatusCode, Json<Value>) {
-    let token_hash = session::hash_refresh_token(&req.refresh_token);
-    let _ = crate::db::sessions::revoke_refresh_token(&state.inner.db, &token_hash).await;
-    (StatusCode::OK, Json(json!({ "status": "logged_out" })))
+    Extension(context): Extension<RequestAuditContext>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Some(refresh_token) = cookie_value(&headers, session::REFRESH_COOKIE_NAME) {
+        let token_hash = session::hash_refresh_token(&refresh_token);
+        let _ = crate::db::sessions::revoke_refresh_token(&state.inner.db, &token_hash).await;
+    }
+
+    let mut response = (
+        StatusCode::OK,
+        Json(json!({
+            "status": "logged_out",
+            "request_id": context.request_id,
+        })),
+    )
+        .into_response();
+    session::append_cleared_session_cookies(
+        response.headers_mut(),
+        &state.inner.security.cookie_config,
+    );
+    response
 }
 
-// --- Current user ---
+async fn me(user: AuthUser, State(state): State<AppState>) -> impl IntoResponse {
+    match crate::db::users::get_user_by_id(&state.inner.db, user.user_id).await {
+        Ok(Some(row)) => Json(json!(row)).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "User not found" })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
 
-async fn me(user: AuthUser) -> Json<Value> {
-    Json(json!({
-        "id": user.user_id,
-        "username": user.username,
-        "role": user.role,
-    }))
+fn authenticated_response(
+    state: &AppState,
+    user: &crate::db::users::UserRow,
+    access_token: String,
+    refresh_token: String,
+    status: StatusCode,
+) -> axum::response::Response {
+    let mut headers = HeaderMap::new();
+    session::append_session_cookies(
+        &mut headers,
+        &state.inner.security.cookie_config,
+        &access_token,
+        &refresh_token,
+    );
+    (
+        status,
+        headers,
+        Json(json!({
+            "authenticated": true,
+            "user": {
+                "id": user.id,
+                "username": user.username,
+                "display_name": user.display_name,
+                "role": user.role,
+            }
+        })),
+    )
+        .into_response()
 }

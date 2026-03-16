@@ -7,6 +7,7 @@ use openidconnect::{
 
 /// OIDC provider configuration loaded from DB.
 #[allow(dead_code)]
+#[derive(Debug, Clone)]
 pub struct OidcProviderConfig {
     pub id: uuid::Uuid,
     pub name: String,
@@ -87,6 +88,7 @@ pub async fn exchange_code(
     config: &OidcProviderConfig,
     redirect_url: &str,
     code: &str,
+    expected_nonce: &str,
 ) -> Result<OidcUserInfo, String> {
     let http_client = reqwest::Client::new();
 
@@ -123,9 +125,11 @@ pub async fn exchange_code(
     // Extract ID token claims
     let id_token = token_response.id_token().ok_or("No ID token in response")?;
 
-    // Verify token - skip nonce verification for now (stored in DB challenge)
+    let expected_nonce = Nonce::new(expected_nonce.to_string());
     let claims = id_token
-        .claims(&client.id_token_verifier(), |_: Option<&Nonce>| Ok(()))
+        .claims(&client.id_token_verifier(), |nonce: Option<&Nonce>| {
+            validate_nonce(nonce, &expected_nonce)
+        })
         .map_err(|e| format!("Failed to verify ID token: {}", e))?;
 
     let subject = claims.subject().to_string();
@@ -163,10 +167,19 @@ fn extract_claim_string(id_token: &str, claim_name: &str) -> Option<String> {
         .map(ToString::to_string)
 }
 
+fn validate_nonce(actual: Option<&Nonce>, expected: &Nonce) -> Result<(), String> {
+    match actual {
+        Some(actual) if actual.secret() == expected.secret() => Ok(()),
+        Some(_) => Err("OIDC nonce mismatch".to_string()),
+        None => Err("OIDC nonce missing from ID token".to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::extract_claim_string;
+    use super::{extract_claim_string, validate_nonce};
     use base64::Engine;
+    use openidconnect::Nonce;
 
     #[test]
     fn extract_claim_string_reads_oid_from_id_token_payload() {
@@ -189,5 +202,20 @@ mod tests {
         let id_token = format!("{header}.{payload}.signature");
 
         assert_eq!(extract_claim_string(&id_token, "oid"), None);
+    }
+
+    #[test]
+    fn validate_nonce_accepts_matching_nonce() {
+        let expected = Nonce::new("nonce-1".to_string());
+        let actual = Nonce::new("nonce-1".to_string());
+        assert!(validate_nonce(Some(&actual), &expected).is_ok());
+    }
+
+    #[test]
+    fn validate_nonce_rejects_mismatch() {
+        let expected = Nonce::new("nonce-1".to_string());
+        let actual = Nonce::new("nonce-2".to_string());
+        assert!(validate_nonce(Some(&actual), &expected).is_err());
+        assert!(validate_nonce(None, &expected).is_err());
     }
 }

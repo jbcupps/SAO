@@ -1,7 +1,7 @@
 //! Application state for sao-server.
 
-use crate::runtime::RuntimeManager;
-use anyhow::{anyhow, Context};
+use crate::security::SecurityState;
+use anyhow::Context;
 use sao_core::IdentityManager;
 use sqlx::PgPool;
 use std::path::PathBuf;
@@ -20,7 +20,6 @@ pub struct AppState {
 #[allow(dead_code)]
 pub struct AppStateInner {
     pub identity_manager: Arc<IdentityManager>,
-    pub runtime: Arc<RuntimeManager>,
     pub active_agent_id: std::sync::RwLock<Option<String>>,
     /// WebSocket broadcast channel for streaming events to connected agents
     pub ws_tx: tokio::sync::broadcast::Sender<WsEvent>,
@@ -32,6 +31,8 @@ pub struct AppStateInner {
     pub webauthn: Arc<Webauthn>,
     /// JWT signing secret
     pub jwt_secret: [u8; 32],
+    /// Shared request security state
+    pub security: Arc<SecurityState>,
 }
 
 /// Events sent to WebSocket clients.
@@ -66,28 +67,32 @@ fn init_app_state_with_data_root(
                 data_root.display()
             )
         })?);
-    let runtime = Arc::new(RuntimeManager::new(data_root.clone()).map_err(|error| {
-        anyhow!(
-            "Failed to initialize RuntimeManager using {}: {}",
-            data_root.display(),
-            error.to_value()
-        )
-    })?);
+    let security = Arc::new(SecurityState::from_env());
 
     let (ws_tx, _) = tokio::sync::broadcast::channel::<WsEvent>(256);
 
     Ok(AppState {
         inner: Arc::new(AppStateInner {
             identity_manager,
-            runtime,
             active_agent_id: std::sync::RwLock::new(None),
             ws_tx,
             db,
             vault_state: RwLock::new(vault_state),
             webauthn: Arc::new(webauthn),
             jwt_secret,
+            security,
         }),
     })
+}
+
+pub fn allowed_origin_values(state: &AppState) -> Vec<axum::http::HeaderValue> {
+    state
+        .inner
+        .security
+        .allowed_origins
+        .iter()
+        .filter_map(|origin| axum::http::HeaderValue::from_str(origin).ok())
+        .collect()
 }
 
 /// Default data directory for SAO.

@@ -5,6 +5,8 @@ fn auth_routes_use_start_finish_paths() {
     assert!(src.contains("/api/auth/webauthn/register/finish"));
     assert!(src.contains("/api/auth/webauthn/login/start"));
     assert!(src.contains("/api/auth/webauthn/login/finish"));
+    assert!(src.contains("/api/auth/refresh"));
+    assert!(src.contains("/api/auth/logout"));
 }
 
 #[test]
@@ -33,12 +35,15 @@ fn admin_routes_use_oidc_provider_namespace() {
 }
 
 #[test]
-fn routes_use_brace_path_params_for_agents_and_ws() {
+fn routes_use_brace_path_params_for_agents_without_public_ws_route() {
     let agents_src = include_str!("../src/routes/agents.rs");
     assert!(agents_src.contains("/api/agents/{id}"));
     assert!(!agents_src.contains("/api/agents/:id"));
+}
 
-    let ws_src = include_str!("../src/ws.rs");
-    assert!(ws_src.contains("/ws/agent/{agent_id}"));
-    assert!(!ws_src.contains("/ws/agent/:agent_id"));
+#[test]
+fn setup_routes_do_not_expose_legacy_initialize_endpoint() {
+    let src = include_str!("../src/routes/setup.rs");
+    assert!(src.contains("/api/setup/status"));
+    assert!(!src.contains("/api/setup/initialize"));
 }

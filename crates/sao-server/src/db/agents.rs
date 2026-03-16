@@ -3,6 +3,8 @@ use uuid::Uuid;
 
 #[derive(Debug, serde::Serialize, sqlx::FromRow)]
 pub struct AgentRow {
+    #[serde(skip_serializing)]
+    pub owner_user_id: Option<Uuid>,
     pub id: Uuid,
     pub name: String,
     pub public_key: Option<Vec<u8>>,
@@ -12,20 +14,38 @@ pub struct AgentRow {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-pub async fn list_agents(pool: &PgPool) -> Result<Vec<AgentRow>, sqlx::Error> {
-    sqlx::query_as::<_, AgentRow>(
-        "SELECT id, name, public_key, state, capabilities, created_at, updated_at \
-         FROM agents ORDER BY created_at",
-    )
-    .fetch_all(pool)
-    .await
+pub async fn list_agents(
+    pool: &PgPool,
+    owner_filter: Option<Uuid>,
+) -> Result<Vec<AgentRow>, sqlx::Error> {
+    if let Some(owner_user_id) = owner_filter {
+        sqlx::query_as::<_, AgentRow>(
+            "SELECT owner_user_id, id, name, public_key, state, capabilities, created_at, updated_at \
+             FROM agents WHERE owner_user_id = $1 ORDER BY created_at",
+        )
+        .bind(owner_user_id)
+        .fetch_all(pool)
+        .await
+    } else {
+        sqlx::query_as::<_, AgentRow>(
+            "SELECT owner_user_id, id, name, public_key, state, capabilities, created_at, updated_at \
+             FROM agents ORDER BY created_at",
+        )
+        .fetch_all(pool)
+        .await
+    }
 }
 
-pub async fn create_agent(pool: &PgPool, name: &str) -> Result<AgentRow, sqlx::Error> {
+pub async fn create_agent(
+    pool: &PgPool,
+    owner_user_id: Uuid,
+    name: &str,
+) -> Result<AgentRow, sqlx::Error> {
     sqlx::query_as::<_, AgentRow>(
-        "INSERT INTO agents (name) VALUES ($1) \
-         RETURNING id, name, public_key, state, capabilities, created_at, updated_at",
+        "INSERT INTO agents (owner_user_id, name) VALUES ($1, $2) \
+         RETURNING owner_user_id, id, name, public_key, state, capabilities, created_at, updated_at",
     )
+    .bind(owner_user_id)
     .bind(name)
     .fetch_one(pool)
     .await
@@ -33,7 +53,7 @@ pub async fn create_agent(pool: &PgPool, name: &str) -> Result<AgentRow, sqlx::E
 
 pub async fn get_agent(pool: &PgPool, id: Uuid) -> Result<Option<AgentRow>, sqlx::Error> {
     sqlx::query_as::<_, AgentRow>(
-        "SELECT id, name, public_key, state, capabilities, created_at, updated_at \
+        "SELECT owner_user_id, id, name, public_key, state, capabilities, created_at, updated_at \
          FROM agents WHERE id = $1",
     )
     .bind(id)
