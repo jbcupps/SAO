@@ -23,6 +23,37 @@ import main
 
 
 class MainTests(unittest.TestCase):
+    def test_masked_secret_reader_echoes_stars_and_hides_raw_secret(self):
+        output = io.StringIO()
+        characters = iter(["s", "k", "-", "1", "2", "\x08", "3", "\r"])
+
+        secret = main._read_masked_secret_from_reader(
+            "Enter key: ",
+            lambda: next(characters),
+            stdout=output,
+        )
+
+        self.assertEqual(secret, "sk-13")
+        rendered = output.getvalue()
+        self.assertIn("Enter key: ", rendered)
+        self.assertIn("*", rendered)
+        self.assertNotIn("sk-13", rendered)
+
+    def test_read_masked_secret_uses_plain_readline_when_stdin_is_not_a_tty(self):
+        class FakeInput(io.StringIO):
+            def isatty(self) -> bool:
+                return False
+
+        output = io.StringIO()
+        secret = main.read_masked_secret(
+            "Enter key: ",
+            stdin=FakeInput("sk-ant-test\n"),
+            stdout=output,
+        )
+
+        self.assertEqual(secret, "sk-ant-test")
+        self.assertEqual(output.getvalue(), "Enter key: \n")
+
     def test_parse_args_supports_cleanup_flag(self):
         args = main.parse_args(["--cleanup", "--resource-group", "sao-rg"])
 

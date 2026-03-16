@@ -4,13 +4,17 @@ import json
 import os
 import re
 import shlex
+import socket
 import subprocess
 from typing import Any
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 HOST_OS = os.environ.get("HOST_OS", "windows" if os.name == "nt" else "linux")
 AZURE_CLI_PATHS = ("/usr/bin/az", "/usr/local/bin/az")
 DEFAULT_DEPLOYMENT_NAME = "sao-bootstrap"
 DEFAULT_CONTAINER_APP_NAME = "sao-app"
+DEFAULT_CONTAINER_NAME = "sao"
 DEFAULT_IMAGE_TAG = "latest"
 _CONTROL_CHARACTERS = re.compile(r"[\r\n\x00]")
 _READ_ONLY_PREFIXES_2 = {
@@ -22,13 +26,17 @@ _READ_ONLY_PREFIXES_2 = {
     ("keyvault", "show"),
     ("provider", "show"),
     ("resource", "list"),
+    ("resource", "show"),
 }
 _READ_ONLY_PREFIXES_3 = {
     ("ad", "signed-in-user", "show"),
     ("containerapp", "logs", "show"),
+    ("containerapp", "replica", "show"),
     ("containerapp", "replica", "list"),
     ("containerapp", "revision", "list"),
     ("deployment", "group", "show"),
+    ("monitor", "activity-log", "list"),
+    ("postgres", "flexible-server", "show"),
     ("role", "assignment", "list"),
 }
 _READ_ONLY_PREFIXES_4 = {
@@ -601,6 +609,58 @@ def list_resource_group_resource_types(
     )
 
 
+def list_resource_group_resources(
+    resource_group: str, host_os: str | None = None
+) -> str:
+    """List a compact inventory of Azure resources in the resource group."""
+    return _run(
+        [
+            "resource",
+            "list",
+            "--resource-group",
+            resource_group,
+            "--query",
+            "[].{id:id,name:name,type:type,location:location}",
+            "--output",
+            "json",
+        ],
+        host_os=host_os,
+    )
+
+
+def list_resource_group_activity_log(
+    resource_group: str,
+    offset: str = "6h",
+    host_os: str | None = None,
+) -> str:
+    """List recent activity-log events for the resource group."""
+    return _run(
+        [
+            "monitor",
+            "activity-log",
+            "list",
+            "--resource-group",
+            resource_group,
+            "--offset",
+            offset,
+            "--max-events",
+            "50",
+            "--select",
+            "caller",
+            "eventTimestamp",
+            "httpRequest",
+            "operationName",
+            "properties",
+            "resourceId",
+            "resourceType",
+            "status",
+            "--output",
+            "json",
+        ],
+        host_os=host_os,
+    )
+
+
 def get_group_deployment_error(
     resource_group: str,
     deployment_name: str = DEFAULT_DEPLOYMENT_NAME,
@@ -696,7 +756,6 @@ def get_container_app_system_logs(
     resource_group: str,
     app_name: str = DEFAULT_CONTAINER_APP_NAME,
     tail: int = 50,
-    revision: str | None = None,
     host_os: str | None = None,
 ) -> str:
     """Read recent system logs for the Container App."""
@@ -715,9 +774,6 @@ def get_container_app_system_logs(
         "--output",
         "json",
     ]
-    normalized_revision = (revision or "").strip()
-    if normalized_revision:
-        args.extend(["--revision", normalized_revision])
     return _run(args, host_os=host_os)
 
 
@@ -726,6 +782,8 @@ def get_container_app_logs(
     app_name: str = DEFAULT_CONTAINER_APP_NAME,
     tail: int = 50,
     revision: str | None = None,
+    replica: str | None = None,
+    container: str | None = None,
     host_os: str | None = None,
 ) -> str:
     """Read recent application logs for the Container App."""
@@ -745,6 +803,12 @@ def get_container_app_logs(
     normalized_revision = (revision or "").strip()
     if normalized_revision:
         args.extend(["--revision", normalized_revision])
+    normalized_replica = (replica or "").strip()
+    if normalized_replica:
+        args.extend(["--replica", normalized_replica])
+    normalized_container = (container or "").strip()
+    if normalized_container:
+        args.extend(["--container", normalized_container])
     return _run(args, host_os=host_os)
 
 
@@ -820,6 +884,67 @@ def _parse_log_excerpt(logs_payload: Any, limit: int = 5) -> list[str]:
         )
 
     return [message for message in messages if message][:limit]
+
+
+def _first_response_line(body: str) -> str:
+    """Return a short one-line HTTP response summary."""
+    if not body.strip():
+        return "no response body returned"
+
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        payload = None
+
+    if isinstance(payload, dict):
+        error_block = payload.get("error")
+        if isinstance(error_block, dict):
+            message = str(error_block.get("message") or "").strip()
+            if message:
+                return message
+        message = str(payload.get("message") or payload.get("status") or "").strip()
+        if message:
+            return message
+
+    return body.strip().splitlines()[0][:200]
+
+
+def _probe_public_health(endpoint: str) -> tuple[Any, str]:
+    """Probe the public SAO health endpoint directly over HTTPS."""
+    request = urllib_request.Request(
+        f"{endpoint.rstrip('/')}/api/health",
+        method="GET",
+        headers={"User-Agent": "sao-installer/1.0"},
+    )
+    try:
+        with urllib_request.urlopen(request, timeout=15.0) as response:
+            status_code = int(response.getcode() or 0)
+            charset = response.headers.get_content_charset() or "utf-8"
+            body = response.read().decode(charset, errors="replace").strip()
+    except urllib_error.HTTPError as exc:
+        status_code = exc.code
+        body = exc.read().decode("utf-8", errors="replace").strip()
+    except (TimeoutError, socket.timeout):
+        return None, "HTTP probe timed out after 15 seconds."
+    except urllib_error.URLError as exc:
+        if isinstance(exc.reason, (TimeoutError, socket.timeout)):
+            return None, "HTTP probe timed out after 15 seconds."
+        return None, f"HTTP probe failed: {exc.reason}"
+
+    payload: Any = None
+    if body:
+        try:
+            payload = json.loads(body)
+        except ValueError:
+            payload = None
+
+    if not 200 <= status_code < 300 and payload is None:
+        return None, f"HTTP {status_code}: {_first_response_line(body)}"
+    if not 200 <= status_code < 300:
+        return payload, f"HTTP {status_code}: {json.dumps(payload, indent=2)}"
+    if payload is not None:
+        return payload, json.dumps(payload, indent=2)
+    return None, f"HTTP {status_code}: {_first_response_line(body)}"
 
 
 def _find_revision_summary(
@@ -1001,13 +1126,42 @@ def collect_container_app_diagnostics(
         if replicas_payload is None and "COMMAND FAILED" in replicas_result:
             collection_errors.append(replicas_result)
 
+        container_name = DEFAULT_CONTAINER_NAME
+        if isinstance(app_payload, dict):
+            properties = app_payload.get("properties", {})
+            if isinstance(properties, dict):
+                template = properties.get("template", {})
+                if isinstance(template, dict):
+                    containers = template.get("containers", [])
+                    if isinstance(containers, list) and containers:
+                        first_container = containers[0]
+                        if isinstance(first_container, dict):
+                            container_name = str(
+                                first_container.get("name") or container_name
+                            ).strip() or container_name
+        replica_name = ""
+        if isinstance(replicas_payload, list) and replicas_payload:
+            first_replica = replicas_payload[0]
+            if isinstance(first_replica, dict):
+                replica_name = str(first_replica.get("name") or "").strip()
+
         app_logs_result = get_container_app_logs(
             resource_group=resource_group,
             app_name=app_name,
             tail=50,
             revision=revision_name,
+            replica=replica_name or None,
+            container=container_name,
             host_os=host_os,
         )
+        if "COMMAND FAILED" in app_logs_result and replica_name:
+            app_logs_result = get_container_app_logs(
+                resource_group=resource_group,
+                app_name=app_name,
+                tail=50,
+                revision=revision_name,
+                host_os=host_os,
+            )
         app_logs = _parse_json_output(app_logs_result)
         if app_logs is None:
             if "COMMAND FAILED" in app_logs_result:
@@ -1019,7 +1173,6 @@ def collect_container_app_diagnostics(
             resource_group=resource_group,
             app_name=app_name,
             tail=50,
-            revision=revision_name,
             host_os=host_os,
         )
         system_logs = _parse_json_output(logs_result)
@@ -1109,16 +1262,11 @@ def check_deployment_status(
         ingress = {}
 
     fqdn = str(ingress.get("fqdn") or "").strip()
-    if not fqdn:
-        return "COMMAND FAILED: Could not resolve the SAO Container App ingress FQDN."
-
-    endpoint = f"https://{fqdn}"
-    health_result = _run(
-        ["rest", "--method", "GET", "--url", f"{endpoint}/api/health"],
-        parse_json=True,
-        host_os=host_os,
-    )
-    health_payload = _parse_json_output(health_result)
+    endpoint = f"https://{fqdn}" if fqdn else "<endpoint unavailable>"
+    health_payload = None
+    health_result = "Public health endpoint is not available yet."
+    if fqdn:
+        health_payload, health_result = _probe_public_health(endpoint)
     health_status = ""
     if isinstance(health_payload, dict):
         health_status = str(health_payload.get("status") or "").strip().lower()

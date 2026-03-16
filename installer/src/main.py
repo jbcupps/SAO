@@ -2,9 +2,10 @@
 """SAO Installer — Entry point."""
 
 import argparse
-import getpass
 import os
 import sys
+from collections.abc import Callable
+from typing import TextIO
 
 from agent import InstallerAgent
 
@@ -28,6 +29,87 @@ PROVIDER_VISIBILITY_NOTICE = (
     "to Anthropic so the agent can operate. Local transcript files stay on this "
     "machine unless you choose to share them."
 )
+
+
+def _read_masked_secret_from_reader(
+    prompt: str,
+    char_reader: Callable[[], str],
+    stdout: TextIO | None = None,
+) -> str:
+    """Read a secret while echoing one * per entered character."""
+    output = stdout or sys.stdout
+    buffer: list[str] = []
+    output.write(prompt)
+    output.flush()
+
+    while True:
+        ch = char_reader()
+        if ch in {"", None}:  # type: ignore[arg-type]
+            output.write("\n")
+            output.flush()
+            raise EOFError
+        if ch in {"\r", "\n"}:
+            output.write("\n")
+            output.flush()
+            return "".join(buffer)
+        if ch == "\x03":
+            output.write("\n")
+            output.flush()
+            raise KeyboardInterrupt
+        if ch == "\x04":
+            output.write("\n")
+            output.flush()
+            raise EOFError
+        if ch in {"\x08", "\x7f"}:
+            if buffer:
+                buffer.pop()
+                output.write("\b \b")
+                output.flush()
+            continue
+        if ord(ch) < 32:
+            continue
+
+        buffer.append(ch)
+        output.write("*")
+        output.flush()
+
+
+def read_masked_secret(
+    prompt: str,
+    stdin: TextIO | None = None,
+    stdout: TextIO | None = None,
+) -> str:
+    """Read a masked secret from an interactive terminal when available."""
+    input_stream = stdin or sys.stdin
+    output = stdout or sys.stdout
+
+    if not getattr(input_stream, "isatty", lambda: False)():
+        output.write(prompt)
+        output.flush()
+        line = input_stream.readline()
+        if line == "":
+            output.write("\n")
+            output.flush()
+            raise EOFError
+        output.write("\n")
+        output.flush()
+        return line.rstrip("\r\n")
+
+    if os.name == "nt":
+        import msvcrt
+
+        return _read_masked_secret_from_reader(prompt, msvcrt.getwch, output)
+
+    import termios
+    import tty
+
+    fileno = input_stream.fileno()
+    original = termios.tcgetattr(fileno)
+    try:
+        tty.setraw(fileno)
+        return _read_masked_secret_from_reader(prompt, lambda: input_stream.read(1), output)
+    finally:
+        termios.tcsetattr(fileno, termios.TCSADRAIN, original)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -86,7 +168,7 @@ def collect_api_key() -> tuple[str, str]:
 
     while True:
         try:
-            api_key = getpass.getpass("Enter your Anthropic API key: ").strip()
+            api_key = read_masked_secret("Enter your Anthropic API key: ").strip()
         except (EOFError, KeyboardInterrupt):
             print()
             raise

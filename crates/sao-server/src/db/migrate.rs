@@ -27,10 +27,10 @@ pub async fn run_migrations(pool: &PgPool) -> anyhow::Result<()> {
                 let next_delay = retry_config.retry_delay_for_attempt(attempt);
                 if elapsed + next_delay >= retry_config.max_wait {
                     return Err(anyhow::Error::from(error)).context(format!(
-                            "Database migrations did not complete within {} seconds after {} attempts",
-                            retry_config.max_wait.as_secs(),
-                            attempt
-                        ));
+                        "Database migrations did not complete within {} seconds after {} attempts",
+                        retry_config.max_wait.as_secs(),
+                        attempt
+                    ));
                 }
 
                 tracing::warn!(

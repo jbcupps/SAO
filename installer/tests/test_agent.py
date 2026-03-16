@@ -1,5 +1,6 @@
 import copy
 import io
+import json
 import sys
 import types
 import unittest
@@ -212,21 +213,10 @@ class InstallerAgentTests(unittest.TestCase):
         self.assertEqual(dispatch_mock.call_count, 1)
         provisioning_mock.assert_called_once()
 
-    def test_provisioning_polling_answers_questions_and_completes_handoff(self):
-        agent = self._make_agent(
-            [
-                FakeResponse(
-                    [
-                        FakeBlock(
-                            "text",
-                            text="Azure is still creating the managed database.",
-                        )
-                    ]
-                )
-            ]
-        )
+    def test_provisioning_polling_answers_iac_status_questions_and_completes_handoff(self):
+        agent = self._make_agent([])
         prompts: list[str] = []
-        answers = iter(["status", "What is being provisioned right now?"])
+        answers = iter(["status", "What exactly is the build function doing?"])
         stdout = io.StringIO()
 
         def fake_input(prompt: str) -> str:
@@ -288,18 +278,17 @@ class InstallerAgentTests(unittest.TestCase):
             ],
         )
         sleep_mock.assert_called_once_with(POLL_INTERVAL_SECONDS)
-        question_call = agent.client.messages.calls[0]
-        self.assertIn(
-            "What is being provisioned right now?",
-            question_call["messages"][0]["content"],
-        )
-        self.assertIn(
-            DEFAULT_DEPLOYMENT_NAME,
-            question_call["messages"][0]["content"],
-        )
+        self.assertEqual(agent.client.messages.calls, [])
         output = stdout.getvalue()
-        self.assertIn("Deployment is still running", output)
-        self.assertIn("Provisioning PostgreSQL.", output)
+        self.assertIn("IaC build status:", output)
+        self.assertIn(
+            "1. [|] PostgreSQL Flexible Server - working",
+            output,
+        )
+        self.assertIn(
+            "The current IaC cycle is walking the resources defined by SAO's Azure template in this order:",
+            output,
+        )
         self.assertIn("Provisioning complete.", output)
         self.assertIn("SAO endpoint: https://sao.example.com", output)
         self.assertIn("Bootstrap admin OID: oid-123", output)
@@ -492,6 +481,124 @@ class InstallerAgentTests(unittest.TestCase):
 
         self.assertIn('"issue_type": "container_image_denied"', result)
         self.assertIn('"name": "sao-app"', result)
+
+    def test_collect_failure_bundle_includes_runtime_stage_activity_log_and_inventory(self):
+        agent = self._make_agent([])
+        container_diagnostics = {
+            "app": {
+                "name": "sao-app",
+                "properties": {
+                    "provisioningState": "Succeeded",
+                    "template": {
+                        "containers": [
+                            {
+                                "name": "sao",
+                                "image": "ghcr.io/jbcupps/sao:latest",
+                            }
+                        ]
+                    },
+                },
+            },
+            "latest_revision": "sao-app--rev1",
+            "revisions": [
+                {
+                    "name": "sao-app--rev1",
+                    "properties": {
+                        "healthState": "Unhealthy",
+                        "runningState": "Failed",
+                        "runningStateDetails": "Container crashing: sao",
+                    },
+                }
+            ],
+            "replicas": [
+                {
+                    "name": "replica-1",
+                    "properties": {
+                        "runningState": "NotRunning",
+                        "runningStateDetails": "CrashLoopBackOff",
+                        "containers": [
+                            {
+                                "restartCount": 3,
+                                "runningStateDetails": "CrashLoopBackOff",
+                            }
+                        ],
+                    },
+                }
+            ],
+            "app_logs": [
+                {"Log": "Starting SAO - Secure Agent Orchestrator"},
+                {"Log": "SAO startup checkpoint: db_pool_initialized"},
+                {"Log": "SAO startup checkpoint: migrations_complete"},
+            ],
+            "system_logs": [{"Log": "Container terminated with exit code 101"}],
+            "collection_errors": [],
+        }
+
+        with patch(
+            "tools.azure.collect_group_deployment_diagnostics",
+            return_value={
+                "deployment_name": DEFAULT_DEPLOYMENT_NAME,
+                "error": None,
+                "failed_operations": [],
+                "nested": [],
+                "collection_errors": [],
+            },
+        ), patch(
+            "tools.azure.collect_container_app_diagnostics",
+            return_value=container_diagnostics,
+        ), patch(
+            "tools.azure.list_deleted_key_vaults",
+            return_value="[]",
+        ), patch(
+            "tools.azure.list_resource_group_resources",
+            return_value=(
+                '[{"name":"sao-app","type":"Microsoft.App/containerApps",'
+                '"location":"eastus2"}]'
+            ),
+        ), patch(
+            "tools.azure.list_resource_group_activity_log",
+            return_value=(
+                '[{"eventTimestamp":"2026-03-16T00:02:18Z",'
+                '"operationName":{"value":"Microsoft.App/containerApps/delete"},'
+                '"status":{"value":"Succeeded"},'
+                '"resourceId":"/subscriptions/example/resourceGroups/sao-rg/providers/Microsoft.App/containerApps/sao-app"}]'
+            ),
+        ), patch(
+            "tools.troubleshooting.build_troubleshooting_response",
+            return_value={
+                "issue_type": "containerapp_runtime_startup_failure",
+                "diagnosis": "The SAO container failed during application startup.",
+                "guided_actions": ["cleanup_resource_group"],
+                "manual_commands": ["az containerapp show -g sao-rg -n sao-app --output json"],
+                "safe_to_auto_apply": [],
+            },
+        ):
+            bundle = agent._collect_failure_bundle(
+                resource_group="sao-rg",
+                deployment_name=DEFAULT_DEPLOYMENT_NAME,
+                host_os="windows",
+                initial_failure=(
+                    "Azure runtime verification failed after ARM completed. "
+                    "Revision sao-app--rev1 entered CrashLoopBackOff."
+                ),
+            )
+
+        self.assertEqual(
+            bundle["issue_type"], "containerapp_runtime_startup_failure"
+        )
+        self.assertEqual(bundle["runtime_startup_stage"], "migrations_complete")
+        self.assertEqual(bundle["failed_resource_type"], "Microsoft.App/containerApps")
+        self.assertEqual(bundle["failed_resource_name"], "sao-app")
+        self.assertEqual(bundle["revision"], "sao-app--rev1")
+        self.assertEqual(bundle["replica_restart_count"], 3)
+        self.assertEqual(
+            bundle["resource_inventory"][0]["type"],
+            "Microsoft.App/containerApps",
+        )
+        self.assertIn(
+            "Microsoft.App/containerApps/delete",
+            json.dumps(bundle["activity_log"]),
+        )
 
     def test_apply_guided_fix_purges_deleted_key_vault_and_retries(self):
         agent = self._make_agent([])

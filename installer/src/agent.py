@@ -359,6 +359,42 @@ PHASE_DETAILS = {
         ),
     },
 }
+IAC_PROGRESS_STEPS = [
+    {
+        "key": "postgres",
+        "label": "PostgreSQL Flexible Server",
+        "resource_type": "Microsoft.DBforPostgreSQL/flexibleServers",
+    },
+    {
+        "key": "keyvault",
+        "label": "Key Vault access setup",
+        "resource_type": "Microsoft.KeyVault/vaults",
+    },
+    {
+        "key": "log_analytics",
+        "label": "Log Analytics Workspace",
+        "resource_type": "Microsoft.OperationalInsights/workspaces",
+    },
+    {
+        "key": "container_env",
+        "label": "Container App Environment",
+        "resource_type": "Microsoft.App/managedEnvironments",
+    },
+    {
+        "key": "container_app",
+        "label": "SAO Container App and runtime verification",
+        "resource_type": "Microsoft.App/containerApps",
+    },
+]
+IAC_SPINNER_FRAMES = ["|", "/", "-", "\\"]
+IAC_STATUS_QUESTION_TOKENS = (
+    "build function",
+    "build doing",
+    "being provisioned",
+    "what exactly is the build",
+    "iac cycle",
+    "iac build",
+)
 
 class ToolExecutionPolicy:
     """Runtime controls for installer tool execution."""
@@ -770,10 +806,13 @@ class InstallerAgent:
             messages: list[str] = []
             code = payload.get("code")
             message = payload.get("message")
+            log_message = payload.get("Log") or payload.get("Msg") or payload.get("log")
             if code and message:
                 messages.append(f"{code}: {message}")
             elif message:
                 messages.append(str(message))
+            elif log_message:
+                messages.append(str(log_message))
             elif code and not any(
                 key in payload
                 for key in ("error", "details", "innererror", "statusMessage")
@@ -1519,23 +1558,197 @@ class InstallerAgent:
         second_label = "second" if rounded == 1 else "seconds"
         return f"{rounded} {second_label}"
 
-    def _infer_provisioning_stage(
+    def _load_resource_types(
         self, resource_group: str, host_os: str
-    ) -> str:
-        """Infer a likely provisioning stage from visible resource types."""
+    ) -> set[str] | None:
+        """Return the visible resource types in the resource group when Azure responds."""
         from tools.azure import list_resource_group_resource_types
 
         resource_types_result = list_resource_group_resource_types(
             resource_group, host_os=host_os
         )
         if "COMMAND FAILED" in resource_types_result:
-            return "Azure is still applying the SAO infrastructure changes."
+            return None
 
         parsed_types = self._try_parse_json(resource_types_result)
         if not isinstance(parsed_types, list):
-            return "Azure is still applying the SAO infrastructure changes."
+            return None
 
-        resource_types = {str(item) for item in parsed_types}
+        return {
+            str(item).strip()
+            for item in parsed_types
+            if str(item).strip()
+        }
+
+    def _build_iac_step_statuses(
+        self,
+        resource_types: set[str] | None,
+        deployment_state: str,
+        runtime_state: str | None = None,
+    ) -> list[str]:
+        """Map the current Azure state into the canonical IaC step tracker."""
+        normalized_state = deployment_state.strip()
+        normalized_runtime_state = (runtime_state or "").strip().lower()
+
+        if normalized_state == "Succeeded":
+            final_step_status = "active"
+            if normalized_runtime_state == "ready":
+                final_step_status = "complete"
+            elif normalized_runtime_state == "failed":
+                final_step_status = "failed"
+            return ["complete", "complete", "complete", "complete", final_step_status]
+
+        current_index = 0
+        if resource_types is not None:
+            current_index = len(IAC_PROGRESS_STEPS) - 1
+            for index, step in enumerate(IAC_PROGRESS_STEPS[:-1]):
+                if step["resource_type"] not in resource_types:
+                    current_index = index
+                    break
+
+        statuses = []
+        for index in range(len(IAC_PROGRESS_STEPS)):
+            if index < current_index:
+                statuses.append("complete")
+            elif index == current_index:
+                statuses.append("active")
+            else:
+                statuses.append("tbd")
+
+        if normalized_state in {"Failed", "Canceled"}:
+            statuses[current_index] = "failed"
+
+        return statuses
+
+    def _build_iac_progress_snapshot(
+        self,
+        resource_group: str,
+        host_os: str,
+        deployment_state: str,
+        elapsed: str,
+        spinner_index: int,
+        runtime_state: str | None = None,
+        runtime_elapsed: str | None = None,
+    ) -> dict[str, Any]:
+        """Build the structured status block shown during IaC provisioning."""
+        normalized_state = deployment_state.strip()
+        normalized_runtime_state = (runtime_state or "").strip().lower()
+        resource_types = self._load_resource_types(resource_group, host_os)
+        step_statuses = self._build_iac_step_statuses(
+            resource_types=resource_types,
+            deployment_state=normalized_state,
+            runtime_state=normalized_runtime_state,
+        )
+        spinner_frame = IAC_SPINNER_FRAMES[spinner_index % len(IAC_SPINNER_FRAMES)]
+        steps = []
+
+        for index, (step, status) in enumerate(zip(IAC_PROGRESS_STEPS, step_statuses, strict=True)):
+            if status == "complete":
+                indicator = "[x]"
+                status_label = "complete"
+            elif status == "failed":
+                indicator = "[!]"
+                status_label = "failed"
+            elif status == "active":
+                indicator = f"[{spinner_frame}]"
+                status_label = "working"
+            else:
+                indicator = "[ ]"
+                status_label = "tbd"
+
+            steps.append(
+                {
+                    "index": index + 1,
+                    "key": step["key"],
+                    "label": step["label"],
+                    "status": status,
+                    "status_label": status_label,
+                    "indicator": indicator,
+                }
+            )
+
+        active_step = next(
+            (
+                step["label"]
+                for step in steps
+                if step["status"] in {"active", "failed"}
+            ),
+            IAC_PROGRESS_STEPS[-1]["label"],
+        )
+        summary = (
+            "Azure resource creation finished; SAO runtime verification is still in progress."
+            if normalized_state == "Succeeded"
+            and normalized_runtime_state not in {"ready", "failed"}
+            else (
+                f"Azure deployment is currently working on {active_step}."
+                if normalized_state not in {"Failed", "Canceled"}
+                and normalized_runtime_state != "failed"
+                else f"The IaC cycle failed while working on {active_step}."
+            )
+        )
+
+        return {
+            "deployment_state": normalized_state,
+            "elapsed": elapsed,
+            "runtime_state": normalized_runtime_state or None,
+            "runtime_elapsed": runtime_elapsed,
+            "active_step": active_step,
+            "resource_types": sorted(resource_types) if resource_types else [],
+            "steps": steps,
+            "summary": summary,
+        }
+
+    def _render_iac_progress_lines(self, snapshot: dict[str, Any]) -> list[str]:
+        """Render the canonical IaC progress tracker as terminal lines."""
+        lines = [
+            "IaC build status:",
+            f"Deployment state: {snapshot.get('deployment_state')}",
+            f"Elapsed: {snapshot.get('elapsed')}",
+        ]
+        runtime_state = snapshot.get("runtime_state")
+        runtime_elapsed = snapshot.get("runtime_elapsed")
+        if runtime_state:
+            lines.append(f"Runtime verification: {runtime_state}")
+        if runtime_elapsed:
+            lines.append(f"Runtime verification elapsed: {runtime_elapsed}")
+        lines.append("")
+
+        for step in snapshot.get("steps", []):
+            lines.append(
+                f"{step['index']}. {step['indicator']} {step['label']} - {step['status_label']}"
+            )
+
+        lines.append("")
+        lines.append(str(snapshot.get("summary") or "").strip())
+        return lines
+
+    def _print_iac_progress_snapshot(self, snapshot: dict[str, Any]) -> None:
+        """Print the formatted IaC tracker block."""
+        print()
+        for line in self._render_iac_progress_lines(snapshot):
+            print(line)
+
+    def _question_is_iac_status_request(self, question: str) -> bool:
+        """Return True when the operator is asking what the IaC build is doing."""
+        normalized_question = question.strip().lower()
+        return any(token in normalized_question for token in IAC_STATUS_QUESTION_TOKENS)
+
+    def _print_iac_status_answer(self, snapshot: dict[str, Any]) -> None:
+        """Answer provisioning-status questions with the canonical step tracker."""
+        print(
+            "\nThe current IaC cycle is walking the resources defined by SAO's "
+            "Azure template in this order:"
+        )
+        for line in self._render_iac_progress_lines(snapshot):
+            print(line)
+
+    def _infer_provisioning_stage(
+        self, resource_group: str, host_os: str
+    ) -> str:
+        """Infer a likely provisioning stage from visible resource types."""
+        resource_types = self._load_resource_types(resource_group, host_os)
+        if resource_types is None:
+            return "Azure is still applying the SAO infrastructure changes."
         if "Microsoft.DBforPostgreSQL/flexibleServers" not in resource_types:
             return "Provisioning PostgreSQL."
         if "Microsoft.KeyVault/vaults" not in resource_types:
@@ -1902,6 +2115,137 @@ class InstallerAgent:
 
         return self._dedupe_lines(evidence)
 
+    def _infer_runtime_startup_stage(
+        self, container_app_summary: dict[str, Any] | None
+    ) -> str | None:
+        """Infer the latest startup checkpoint reached before the container failed."""
+        if not isinstance(container_app_summary, dict):
+            return None
+
+        checkpoint_aliases = {
+            "db_pool_initialized": "db_pool_initialized",
+            "migrations_complete": "migrations_complete",
+            "vault_state_determined": "vault_state_determined",
+            "webauthn_initialized": "webauthn_initialized",
+            "jwt_initialized": "jwt_initialized",
+            "identity_runtime_initialized": "identity_runtime_initialized",
+            "listener_bound": "listener_bound",
+        }
+        checkpoint_pattern = re.compile(
+            r"SAO startup checkpoint:\s*([a-z0-9_]+)",
+            flags=re.IGNORECASE,
+        )
+
+        log_lines = [
+            *[str(item).strip() for item in container_app_summary.get("app_logs", [])],
+            *[
+                str(item).strip()
+                for item in container_app_summary.get("system_logs", [])
+            ],
+        ]
+        last_checkpoint = None
+        for line in log_lines:
+            match = checkpoint_pattern.search(line)
+            if match:
+                last_checkpoint = checkpoint_aliases.get(
+                    match.group(1).lower(), match.group(1).lower()
+                )
+
+        if last_checkpoint:
+            return last_checkpoint
+
+        lowered_logs = " ".join(log_lines).lower()
+        if "sao server listening on" in lowered_logs:
+            return "listener_bound"
+        if "running database migrations" in lowered_logs:
+            return "after_database_migrations"
+        if "starting sao - secure agent orchestrator" in lowered_logs:
+            return "startup_begin"
+        return None
+
+    def _summarize_resource_inventory(
+        self, resources_payload: dict[str, Any] | list[Any] | None
+    ) -> list[dict[str, str]]:
+        """Trim resource inventory down to the fields useful for troubleshooting."""
+        if not isinstance(resources_payload, list):
+            return []
+
+        summarized = []
+        for entry in resources_payload[:15]:
+            if not isinstance(entry, dict):
+                continue
+            summarized.append(
+                {
+                    "name": str(entry.get("name") or "").strip(),
+                    "type": str(entry.get("type") or "").strip(),
+                    "location": str(entry.get("location") or "").strip(),
+                }
+            )
+        return summarized
+
+    def _summarize_activity_log(
+        self, activity_payload: dict[str, Any] | list[Any] | None
+    ) -> list[dict[str, str]]:
+        """Return a compact activity-log view for the latest deployment evidence."""
+        if not isinstance(activity_payload, list):
+            return []
+
+        summarized = []
+        for entry in activity_payload[:20]:
+            if not isinstance(entry, dict):
+                continue
+            operation_name = entry.get("operationName") or {}
+            status = entry.get("status") or {}
+            http_request = entry.get("httpRequest") or {}
+            properties = entry.get("properties") or {}
+
+            if not isinstance(operation_name, dict):
+                operation_name = {}
+            if not isinstance(status, dict):
+                status = {}
+            if not isinstance(http_request, dict):
+                http_request = {}
+            if not isinstance(properties, dict):
+                properties = {}
+
+            summarized.append(
+                {
+                    "timestamp": str(entry.get("eventTimestamp") or "").strip(),
+                    "operation": str(operation_name.get("value") or "").strip(),
+                    "status": str(status.get("value") or "").strip(),
+                    "resource_id": str(entry.get("resourceId") or "").strip(),
+                    "method": str(http_request.get("method") or "").strip(),
+                    "message": str(properties.get("message") or "").strip(),
+                }
+            )
+
+        return summarized
+
+    def _extract_activity_log_evidence(
+        self, activity_log_summary: list[dict[str, str]]
+    ) -> list[str]:
+        """Pull high-signal delete/update events into troubleshooting evidence."""
+        evidence = []
+        for entry in activity_log_summary:
+            operation = str(entry.get("operation") or "").strip()
+            if not operation:
+                continue
+            lowered_operation = operation.lower()
+            if "delete" not in lowered_operation and "write" not in lowered_operation:
+                continue
+            timestamp = str(entry.get("timestamp") or "").strip()
+            status = str(entry.get("status") or "").strip()
+            resource_id = str(entry.get("resource_id") or "").strip()
+            evidence.append(
+                "Activity log: "
+                + " | ".join(
+                    part
+                    for part in [timestamp, operation, status, resource_id]
+                    if part
+                )
+            )
+        return evidence[:6]
+
     def _clear_last_failure_bundle(self) -> None:
         """Clear troubleshooting state after a successful recovery."""
         self.installer_state["last_failure_bundle"] = None
@@ -1924,6 +2268,8 @@ class InstallerAgent:
             collect_container_app_diagnostics,
             collect_group_deployment_diagnostics,
             list_deleted_key_vaults,
+            list_resource_group_activity_log,
+            list_resource_group_resources,
         )
         from tools.troubleshooting import build_troubleshooting_response
 
@@ -2003,11 +2349,52 @@ class InstallerAgent:
         evidence_lines.extend(
             self._extract_container_app_evidence(raw_container_app_diagnostics)
         )
+        resource_inventory_result = list_resource_group_resources(
+            resource_group=resource_group,
+            host_os=host_os,
+        )
+        resource_inventory_payload = self._try_parse_json(resource_inventory_result)
+        resource_inventory_summary = self._summarize_resource_inventory(
+            resource_inventory_payload
+        )
+        if "COMMAND FAILED" in resource_inventory_result:
+            evidence_lines.append(resource_inventory_result.strip())
+
+        activity_log_result = list_resource_group_activity_log(
+            resource_group=resource_group,
+            host_os=host_os,
+        )
+        activity_log_payload = self._try_parse_json(activity_log_result)
+        activity_log_summary = self._summarize_activity_log(activity_log_payload)
+        evidence_lines.extend(self._extract_activity_log_evidence(activity_log_summary))
+        if "COMMAND FAILED" in activity_log_result:
+            evidence_lines.append(activity_log_result.strip())
         evidence_lines = self._dedupe_lines(evidence_lines)
         combined_evidence = "\n".join(evidence_lines)
         container_app_summary = self._summarize_container_app_diagnostics(
             raw_container_app_diagnostics
         )
+        if not str(failed_resource.get("type") or "").strip():
+            app_payload = (
+                raw_container_app_diagnostics.get("app")
+                if isinstance(raw_container_app_diagnostics, dict)
+                else None
+            )
+            if isinstance(app_payload, dict):
+                failed_resource = {
+                    "type": "Microsoft.App/containerApps",
+                    "name": str(app_payload.get("name") or "sao-app").strip(),
+                    "deployment_name": "container-app",
+                }
+        runtime_startup_stage = self._infer_runtime_startup_stage(
+            container_app_summary
+        )
+        if runtime_startup_stage:
+            evidence_lines.append(
+                f"Runtime startup stage reached: {runtime_startup_stage}"
+            )
+            evidence_lines = self._dedupe_lines(evidence_lines)
+            combined_evidence = "\n".join(evidence_lines)
         image_reference = self._extract_image_reference(
             raw_container_app_diagnostics, evidence_lines
         )
@@ -2027,7 +2414,14 @@ class InstallerAgent:
                 "evidence": evidence_lines,
                 "deleted_vault": deleted_vault_match,
                 "image_reference": image_reference,
+                "container_app_name": str(failed_resource.get("name") or "").strip(),
                 "host_os": host_os,
+                "revision": (
+                    container_app_summary.get("latest_revision")
+                    if isinstance(container_app_summary, dict)
+                    else None
+                ),
+                "runtime_startup_stage": runtime_startup_stage,
             }
         )
 
@@ -2057,7 +2451,31 @@ class InstallerAgent:
             ),
             "deleted_vault": deleted_vault_match,
             "image_reference": image_reference,
+            "container_app_name": str(failed_resource.get("name") or "").strip(),
             "container_app": container_app_summary,
+            "runtime_startup_stage": runtime_startup_stage,
+            "revision": (
+                container_app_summary.get("latest_revision")
+                if isinstance(container_app_summary, dict)
+                else None
+            ),
+            "replica_restart_count": (
+                container_app_summary.get("replica_restart_count")
+                if isinstance(container_app_summary, dict)
+                else None
+            ),
+            "app_logs": (
+                container_app_summary.get("app_logs")
+                if isinstance(container_app_summary, dict)
+                else []
+            ),
+            "system_logs": (
+                container_app_summary.get("system_logs")
+                if isinstance(container_app_summary, dict)
+                else []
+            ),
+            "resource_inventory": resource_inventory_summary,
+            "activity_log": activity_log_summary,
             "raw_error": combined_evidence,
         }
         self._store_last_failure_bundle(bundle)
@@ -2279,6 +2697,18 @@ class InstallerAgent:
                 "That replacement image should still be the SAO runtime image "
                 "contract from docker/Dockerfile."
             )
+        elif issue_type == "containerapp_runtime_startup_failure":
+            lines.append(
+                "Recommended fix: use the startup checkpoint and latest "
+                "Container App logs below to correct the boot-time failure, "
+                "then redeploy the SAO runtime image."
+            )
+        elif issue_type == "containerapp_revision_failed":
+            lines.append(
+                "Recommended fix: inspect the latest revision, replica, and "
+                "system logs to identify why the revision never became healthy "
+                "before retrying or cleaning up."
+            )
 
         failed_resource = diagnostics.get("failed_resource") or {}
         resource_type = str(failed_resource.get("type") or "").strip()
@@ -2288,6 +2718,12 @@ class InstallerAgent:
                 part for part in (resource_type, resource_name) if part
             )
             lines.append(f"Failing resource: {resource_label}")
+
+        runtime_startup_stage = str(
+            diagnostics.get("runtime_startup_stage") or ""
+        ).strip()
+        if runtime_startup_stage:
+            lines.append(f"Runtime startup stage: {runtime_startup_stage}")
 
         nested_deployment_name = str(
             diagnostics.get("nested_deployment_name") or ""
@@ -2344,6 +2780,7 @@ class InstallerAgent:
             self.installer_state.get("name_suffix")
         )
         runtime_check_started_at: float | None = None
+        poll_iteration = 0
 
         validation_result = validate_infrastructure_provisioning(
             resource_group=resource_group,
@@ -2494,11 +2931,17 @@ class InstallerAgent:
                 runtime_elapsed = self._format_elapsed(
                     time.monotonic() - runtime_check_started_at
                 )
-                print(
-                    "\nAzure finished provisioning the resources, but the SAO "
-                    "application is still warming up "
-                    f"({runtime_elapsed} runtime verification elapsed)."
+                progress_snapshot = self._build_iac_progress_snapshot(
+                    resource_group=resource_group,
+                    host_os=host_os,
+                    deployment_state=state,
+                    elapsed=elapsed,
+                    spinner_index=poll_iteration,
+                    runtime_state=runtime_state,
+                    runtime_elapsed=runtime_elapsed,
                 )
+                self._print_iac_progress_snapshot(progress_snapshot)
+                print("Runtime details:")
                 print(health_result)
 
                 user_input = input(
@@ -2507,24 +2950,30 @@ class InstallerAgent:
                 )
                 normalized_input = user_input.strip()
                 if not normalized_input:
+                    poll_iteration += 1
                     time.sleep(POLL_INTERVAL_SECONDS)
                     continue
                 if normalized_input.lower() == "status":
                     continue
 
-                self._answer_polling_question(
-                    normalized_input,
-                    {
-                        "deployment_name": deployment_name,
-                        "resource_group": resource_group,
-                        "status": parsed_status,
-                        "runtime_health": health_result,
-                        "elapsed": elapsed,
-                        "admin_oid": admin_oid,
-                        "name_suffix": name_suffix,
-                        "image_reference": image_reference,
-                    },
-                )
+                if self._question_is_iac_status_request(normalized_input):
+                    self._print_iac_status_answer(progress_snapshot)
+                else:
+                    self._answer_polling_question(
+                        normalized_input,
+                        {
+                            "deployment_name": deployment_name,
+                            "resource_group": resource_group,
+                            "status": parsed_status,
+                            "runtime_health": health_result,
+                            "elapsed": elapsed,
+                            "admin_oid": admin_oid,
+                            "name_suffix": name_suffix,
+                            "image_reference": image_reference,
+                            "iac_progress": progress_snapshot,
+                        },
+                    )
+                poll_iteration += 1
                 time.sleep(POLL_INTERVAL_SECONDS)
                 continue
 
@@ -2544,11 +2993,14 @@ class InstallerAgent:
                     diagnostics=diagnostics,
                 )
 
-            stage_message = self._infer_provisioning_stage(resource_group, host_os)
-            print(
-                "\nDeployment is still running "
-                f"({elapsed} elapsed). {stage_message}"
+            progress_snapshot = self._build_iac_progress_snapshot(
+                resource_group=resource_group,
+                host_os=host_os,
+                deployment_state=state,
+                elapsed=elapsed,
+                spinner_index=poll_iteration,
             )
+            self._print_iac_progress_snapshot(progress_snapshot)
 
             user_input = input(
                 "\nDuring provisioning, press Enter to keep waiting, "
@@ -2556,23 +3008,29 @@ class InstallerAgent:
             )
             normalized_input = user_input.strip()
             if not normalized_input:
+                poll_iteration += 1
                 time.sleep(POLL_INTERVAL_SECONDS)
                 continue
             if normalized_input.lower() == "status":
                 continue
 
-            self._answer_polling_question(
-                normalized_input,
-                {
-                    "deployment_name": deployment_name,
-                    "resource_group": resource_group,
-                    "status": parsed_status,
-                    "elapsed": elapsed,
-                    "admin_oid": admin_oid,
-                    "name_suffix": name_suffix,
-                    "image_reference": image_reference,
-                },
-            )
+            if self._question_is_iac_status_request(normalized_input):
+                self._print_iac_status_answer(progress_snapshot)
+            else:
+                self._answer_polling_question(
+                    normalized_input,
+                    {
+                        "deployment_name": deployment_name,
+                        "resource_group": resource_group,
+                        "status": parsed_status,
+                        "elapsed": elapsed,
+                        "admin_oid": admin_oid,
+                        "name_suffix": name_suffix,
+                        "image_reference": image_reference,
+                        "iac_progress": progress_snapshot,
+                    },
+                )
+            poll_iteration += 1
             time.sleep(POLL_INTERVAL_SECONDS)
 
     def _execute_phase(self, tool_blocks: list[Any]) -> str:

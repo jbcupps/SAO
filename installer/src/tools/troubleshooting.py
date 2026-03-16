@@ -60,6 +60,13 @@ def _normalize_context(request: dict[str, Any]) -> dict[str, str]:
         "image_reference": str(
             request.get("image_reference") or DEFAULT_IMAGE_REFERENCE
         ).strip(),
+        "container_app_name": str(
+            request.get("container_app_name") or ""
+        ).strip(),
+        "revision": str(request.get("revision") or "").strip(),
+        "runtime_startup_stage": str(
+            request.get("runtime_startup_stage") or ""
+        ).strip(),
         "host_os": str(request.get("host_os") or "windows").strip(),
         "issue_type_hint": str(request.get("issue_type_hint") or "").strip(),
         "raw_error": _flatten_text(request.get("raw_error")),
@@ -80,6 +87,14 @@ def _normalize_context(request: dict[str, Any]) -> dict[str, str]:
         context["deployment_name"] = "sao-bootstrap"
     if not context["location"]:
         context["location"] = "eastus2"
+    if (
+        not context["container_app_name"]
+        and "microsoft.app/containerapps"
+        in context["failed_resource_type"].lower()
+    ):
+        context["container_app_name"] = (
+            context["failed_resource_name"] or "sao-app"
+        )
     return context
 
 

@@ -94,7 +94,27 @@ class AzureToolTests(unittest.TestCase):
         )
         self.assertTrue(
             azure.is_safe_read_only_az_args(
+                ["containerapp", "replica", "show", "--name", "replica-1"]
+            )
+        )
+        self.assertTrue(
+            azure.is_safe_read_only_az_args(
                 ["containerapp", "replica", "list", "--name", "sao-app"]
+            )
+        )
+        self.assertTrue(
+            azure.is_safe_read_only_az_args(
+                ["monitor", "activity-log", "list", "--resource-group", "sao-rg"]
+            )
+        )
+        self.assertTrue(
+            azure.is_safe_read_only_az_args(
+                ["postgres", "flexible-server", "show", "--name", "sao-pg"]
+            )
+        )
+        self.assertTrue(
+            azure.is_safe_read_only_az_args(
+                ["resource", "show", "--ids", "/subscriptions/example"]
             )
         )
         self.assertFalse(
@@ -338,7 +358,7 @@ class AzureToolTests(unittest.TestCase):
 
     def test_collect_container_app_diagnostics_reads_revisions_replicas_and_logs(self):
         app_payload = (
-            '{"properties":{"provisioningState":"Failed","latestRevisionName":"sao-app--rev1","template":{"containers":[{"image":"ghcr.io/jbcupps/sao:latest"}]}}}'
+            '{"name":"sao-app","properties":{"provisioningState":"Failed","latestRevisionName":"sao-app--rev1","template":{"containers":[{"name":"sao","image":"ghcr.io/jbcupps/sao:latest"}]}}}'
         )
         revisions_payload = '[{"name":"sao-app--rev1"}]'
         replicas_payload = '[{"name":"replica-1","properties":{"runningState":"NotRunning"}}]'
@@ -382,13 +402,14 @@ class AzureToolTests(unittest.TestCase):
             app_name="sao-app",
             tail=50,
             revision="sao-app--rev1",
+            replica="replica-1",
+            container="sao",
             host_os="windows",
         )
         logs_mock.assert_called_once_with(
             resource_group="sao-rg",
             app_name="sao-app",
             tail=50,
-            revision="sao-app--rev1",
             host_os="windows",
         )
 
@@ -442,17 +463,21 @@ class AzureToolTests(unittest.TestCase):
             "tools.azure.collect_container_app_diagnostics",
             return_value=diagnostics,
         ), patch(
-            "tools.azure._run",
-            return_value="COMMAND FAILED (exit 1): timeout",
-        ):
+            "tools.azure._probe_public_health",
+            return_value=(None, "HTTP probe timed out after 15 seconds."),
+        ), patch(
+            "tools.azure._run"
+        ) as run_mock:
             status = azure.check_deployment_status(
                 resource_group="sao-rg", host_os="windows"
             )
 
+        run_mock.assert_not_called()
         self.assertIn("Endpoint: https://sao.example.com", status)
         self.assertIn("Ready: false", status)
         self.assertIn("Runtime state: failed", status)
         self.assertIn("Replica restarts: 4", status)
+        self.assertIn("Health: HTTP probe timed out after 15 seconds.", status)
         self.assertIn("Application logs:", status)
 
 

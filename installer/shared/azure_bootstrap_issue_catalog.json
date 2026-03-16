@@ -173,11 +173,39 @@
         "cleanup_resource_group"
       ],
       "manual_commands": [
-        "az containerapp show -g [[resource_group]] -n sao-app --output json",
-        "az containerapp revision list -g [[resource_group]] -n sao-app --all --output json",
-        "az containerapp replica list -g [[resource_group]] -n sao-app --output json",
-        "az containerapp logs show -g [[resource_group]] -n sao-app --tail 50 --output json",
-        "az containerapp logs show -g [[resource_group]] -n sao-app --type system --tail 50 --output json"
+        "az containerapp show -g [[resource_group]] -n [[container_app_name]] --output json",
+        "az containerapp revision list -g [[resource_group]] -n [[container_app_name]] --all --output json",
+        "az containerapp replica list -g [[resource_group]] -n [[container_app_name]] --output json",
+        "az containerapp logs show -g [[resource_group]] -n [[container_app_name]] --tail 50 --output json",
+        "az containerapp logs show -g [[resource_group]] -n [[container_app_name]] --type system --tail 50 --output json",
+        "az resource list -g [[resource_group]] --output table",
+        "az monitor activity-log list --resource-group [[resource_group]] --offset 6h --output table"
+      ],
+      "safe_to_auto_apply": []
+    },
+    {
+      "issue_type": "containerapp_runtime_startup_failure",
+      "match": {
+        "resource_type_contains": [
+          "microsoft.app/containerapps"
+        ],
+        "all_of": [
+          "runtime startup stage reached"
+        ]
+      },
+      "diagnosis": "Azure finished the IaC deployment, but the SAO container failed during application startup before it reached a healthy listening state.",
+      "guided_actions": [
+        "retry_with_image_override",
+        "cleanup_resource_group"
+      ],
+      "manual_commands": [
+        "az containerapp show -g [[resource_group]] -n [[container_app_name]] --output json",
+        "az containerapp revision list -g [[resource_group]] -n [[container_app_name]] --all --output json",
+        "az containerapp replica list -g [[resource_group]] -n [[container_app_name]] --output json",
+        "az containerapp logs show -g [[resource_group]] -n [[container_app_name]] --tail 100 --output json",
+        "az containerapp logs show -g [[resource_group]] -n [[container_app_name]] --type system --tail 100 --output json",
+        "az resource list -g [[resource_group]] --output table",
+        "az monitor activity-log list --resource-group [[resource_group]] --offset 6h --output table"
       ],
       "safe_to_auto_apply": []
     },
@@ -201,9 +229,11 @@
         "cleanup_resource_group"
       ],
       "manual_commands": [
-        "az containerapp show -g [[resource_group]] -n sao-app --output json",
-        "az containerapp revision list -g [[resource_group]] -n sao-app --all --output json",
-        "az containerapp logs show -g [[resource_group]] -n sao-app --type system --tail 50 --output json"
+        "az containerapp show -g [[resource_group]] -n [[container_app_name]] --output json",
+        "az containerapp revision list -g [[resource_group]] -n [[container_app_name]] --all --output json",
+        "az containerapp logs show -g [[resource_group]] -n [[container_app_name]] --type system --tail 50 --output json",
+        "az resource list -g [[resource_group]] --output table",
+        "az monitor activity-log list --resource-group [[resource_group]] --offset 6h --output table"
       ],
       "safe_to_auto_apply": []
     },

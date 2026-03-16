@@ -59,6 +59,7 @@ resource saoApp 'Microsoft.App/containerApps@2024-03-01' = {
           env: [
             { name: 'DATABASE_URL', secretRef: 'database-url' }
             { name: 'KEY_VAULT_URI', value: keyVaultUri }
+            { name: 'RUST_BACKTRACE', value: '1' }
             { name: 'SAO_BOOTSTRAP_ADMIN_OID', value: adminOid }
             { name: 'SAO_PORT', value: '3100' }
             { name: 'SAO_STARTUP_DB_MAX_WAIT_SECONDS', value: '75' }
