@@ -26,6 +26,55 @@ export interface Agent {
   capabilities: string[];
   created_at: string;
   updated_at: string;
+  default_provider?: string | null;
+  default_id_model?: string | null;
+  default_ego_model?: string | null;
+}
+
+export type LlmProviderName =
+  | 'openai'
+  | 'anthropic'
+  | 'ollama'
+  | 'grok'
+  | 'gemini';
+
+export interface LlmProvider {
+  provider: LlmProviderName;
+  enabled: boolean;
+  base_url: string | null;
+  approved_models: string[];
+  default_model: string | null;
+  has_api_key: boolean;
+  updated_at: string;
+}
+
+export interface LlmProviderTestResult {
+  ok: boolean;
+  provider: LlmProviderName;
+  model: string;
+  latency_ms: number;
+  preview?: string;
+  error?: string;
+}
+
+export interface UpdateLlmProviderData {
+  enabled: boolean;
+  base_url?: string | null;
+  approved_models?: string[];
+  default_model?: string | null;
+  api_key?: string;
+}
+
+export interface AgentEgressEvent {
+  event_id: string;
+  user_id: string;
+  agent_id: string | null;
+  orion_id: string;
+  event_type: string;
+  payload: unknown;
+  enqueued_at: string;
+  attempts: number;
+  created_at: string;
 }
 
 export interface AgentBirthResponse {
@@ -42,7 +91,10 @@ export interface AgentStatusResponse {
   documents: string[];
   soul_immutable: boolean;
   personality_preview?: string;
-  last_heartbeat?: string;
+  default_provider?: string | null;
+  default_id_model?: string | null;
+  default_ego_model?: string | null;
+  last_heartbeat?: string | null;
 }
 
 export interface OidcProvider {
@@ -76,6 +128,11 @@ export interface SetupStatus {
   bootstrap_mode?: 'installer_required' | 'operational';
   recommended_installer?: {
     command: string;
+    commands?: {
+      powershell?: string;
+      bash?: string;
+      published_image?: string;
+    };
     image_role: string;
   };
 }

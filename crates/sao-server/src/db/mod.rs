@@ -1,9 +1,12 @@
 pub mod admin;
 pub mod admin_entity;
+pub mod agent_tokens;
 pub mod agents;
 pub mod audit;
+pub mod llm_providers;
 pub mod migrate;
 pub mod oidc;
+pub mod orion;
 pub mod pool;
 pub mod sessions;
 pub mod skills;

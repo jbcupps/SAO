@@ -360,10 +360,7 @@ pub struct NewSkillReview {
     pub notes: Option<String>,
 }
 
-pub async fn insert_review(
-    pool: &PgPool,
-    review: NewSkillReview,
-) -> Result<i64, sqlx::Error> {
+pub async fn insert_review(pool: &PgPool, review: NewSkillReview) -> Result<i64, sqlx::Error> {
     let row: (i64,) = sqlx::query_as(
         "INSERT INTO skill_reviews \
          (target_type, target_id, action, reviewer_user_id, policy_score, policy_details, notes) \
@@ -394,4 +391,3 @@ pub async fn list_reviews_for_target(
     .fetch_all(pool)
     .await
 }
-

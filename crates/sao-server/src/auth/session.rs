@@ -1,5 +1,5 @@
-use chrono::{Duration, Utc};
 use axum::http::HeaderMap;
+use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
@@ -7,9 +7,7 @@ use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use uuid::Uuid;
 
-use crate::security::{
-    append_set_cookie, build_cookie, build_expired_cookie, CookieConfig,
-};
+use crate::security::{append_set_cookie, build_cookie, build_expired_cookie, CookieConfig};
 
 pub const ACCESS_COOKIE_NAME: &str = "sao_access_token";
 pub const REFRESH_COOKIE_NAME: &str = "sao_refresh_token";
@@ -28,12 +26,7 @@ pub struct Claims {
 
 /// Generate a random JWT secret if not provided via env.
 pub fn jwt_secret() -> [u8; 32] {
-    if let Ok(secret) = std::env::var("SAO_JWT_SECRET") {
-        let mut hasher = Sha256::new();
-        hasher.update(secret.as_bytes());
-        let result = hasher.finalize();
-        let mut key = [0u8; 32];
-        key.copy_from_slice(&result);
+    if let Some(key) = jwt_secret_from_env() {
         return key;
     }
 
@@ -47,6 +40,22 @@ pub fn jwt_secret() -> [u8; 32] {
         "No SAO_JWT_SECRET set and no local secret could be persisted, using random key (sessions won't survive restarts)"
     );
     key
+}
+
+fn jwt_secret_from_env() -> Option<[u8; 32]> {
+    let secret = std::env::var("SAO_JWT_SECRET").ok()?;
+    let secret = secret.trim();
+    if secret.is_empty() {
+        tracing::warn!("Ignoring empty SAO_JWT_SECRET");
+        return None;
+    }
+
+    let mut hasher = Sha256::new();
+    hasher.update(secret.as_bytes());
+    let result = hasher.finalize();
+    let mut key = [0u8; 32];
+    key.copy_from_slice(&result);
+    Some(key)
 }
 
 fn load_or_create_local_jwt_secret() -> Option<[u8; 32]> {
@@ -197,6 +206,26 @@ pub fn append_session_cookies(
 }
 
 pub fn append_cleared_session_cookies(headers: &mut HeaderMap, cookie_config: &CookieConfig) {
-    append_set_cookie(headers, &build_expired_cookie(ACCESS_COOKIE_NAME, cookie_config));
-    append_set_cookie(headers, &build_expired_cookie(REFRESH_COOKIE_NAME, cookie_config));
+    append_set_cookie(
+        headers,
+        &build_expired_cookie(ACCESS_COOKIE_NAME, cookie_config),
+    );
+    append_set_cookie(
+        headers,
+        &build_expired_cookie(REFRESH_COOKIE_NAME, cookie_config),
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn jwt_secret_ignores_empty_env_value() {
+        std::env::set_var("SAO_JWT_SECRET", "");
+        let key = jwt_secret_from_env();
+        std::env::remove_var("SAO_JWT_SECRET");
+
+        assert!(key.is_none());
+    }
 }

@@ -1,8 +1,11 @@
 pub mod admin;
 pub mod agents;
 pub mod auth;
+pub mod bundle;
 pub mod health;
+pub mod llm;
 pub mod oidc;
+pub mod orion;
 pub mod setup;
 pub mod skills;
 pub mod vault;
@@ -21,5 +24,8 @@ pub fn routes() -> Router<AppState> {
         .merge(agents::routes())
         .merge(vault::routes())
         .merge(admin::routes())
+        .merge(orion::routes())
         .merge(skills::routes())
+        .merge(llm::routes())
+        .merge(bundle::routes())
 }

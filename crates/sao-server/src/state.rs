@@ -53,7 +53,7 @@ pub fn init_app_state(
     init_app_state_with_data_root(db, vault_state, webauthn, jwt_secret, data_root)
 }
 
-fn init_app_state_with_data_root(
+pub(crate) fn init_app_state_with_data_root(
     db: PgPool,
     vault_state: VaultState,
     webauthn: Webauthn,

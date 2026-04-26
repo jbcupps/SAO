@@ -81,7 +81,11 @@ impl SecurityState {
         let secure = std::env::var("SAO_COOKIE_SECURE")
             .ok()
             .and_then(|value| parse_bool(&value))
-            .unwrap_or_else(|| allowed_origins.iter().any(|origin| origin.starts_with("https://")));
+            .unwrap_or_else(|| {
+                allowed_origins
+                    .iter()
+                    .any(|origin| origin.starts_with("https://"))
+            });
         let domain = std::env::var("SAO_COOKIE_DOMAIN")
             .ok()
             .map(|value| value.trim().to_string())
@@ -177,12 +181,7 @@ impl ChallengeStore {
         }
     }
 
-    pub async fn insert_oidc_state(
-        &self,
-        state_id: String,
-        provider_key: String,
-        nonce: String,
-    ) {
+    pub async fn insert_oidc_state(&self, state_id: String, provider_key: String, nonce: String) {
         self.cleanup_expired().await;
         self.entries.lock().await.insert(
             state_id,
@@ -310,7 +309,10 @@ pub async fn enforce_request_security(
         }
     }
 
-    if path.starts_with("/api/") && requires_csrf(&method) {
+    if path.starts_with("/api/")
+        && requires_csrf(&method)
+        && !is_orion_machine_request(&path, request.headers())
+    {
         if let Some(origin) = context.origin.as_deref() {
             if !state.inner.security.is_allowed_origin(origin) {
                 tracing::warn!(
@@ -423,7 +425,8 @@ pub fn build_cookie(
 }
 
 pub fn build_expired_cookie(name: &str, config: &CookieConfig) -> String {
-    let mut cookie = format!("{name}=; Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax");
+    let mut cookie =
+        format!("{name}=; Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax");
     if config.secure {
         cookie.push_str("; Secure");
     }
@@ -479,15 +482,21 @@ fn build_request_context(headers: &HeaderMap) -> RequestAuditContext {
 
 fn set_request_id_header(headers: &mut HeaderMap, request_id: &str) {
     if let Ok(value) = HeaderValue::from_str(request_id) {
-        headers.insert(
-            HeaderName::from_static(REQUEST_ID_HEADER),
-            value,
-        );
+        headers.insert(HeaderName::from_static(REQUEST_ID_HEADER), value);
     }
 }
 
 fn requires_csrf(method: &Method) -> bool {
     !matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
+}
+
+fn is_orion_machine_request(path: &str, headers: &HeaderMap) -> bool {
+    let has_bearer = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .is_some_and(|value| value.starts_with("Bearer "));
+    has_bearer && (path == "/api/orion/egress" || path.starts_with("/api/orion/"))
 }
 
 fn rate_limit_bucket(method: &Method, path: &str) -> Option<(&'static str, usize, Duration)> {
@@ -496,17 +505,13 @@ fn rate_limit_bucket(method: &Method, path: &str) -> Option<(&'static str, usize
         | ("POST", "/api/auth/webauthn/register/finish")
         | ("POST", "/api/auth/webauthn/login/start")
         | ("POST", "/api/auth/webauthn/login/finish")
-        | ("GET", "/api/auth/oidc/callback") => {
-            Some(("auth", 20, Duration::from_secs(60)))
-        }
+        | ("GET", "/api/auth/oidc/callback") => Some(("auth", 20, Duration::from_secs(60))),
         ("GET", path) if path.starts_with("/api/auth/oidc/") => {
             Some(("oidc", 20, Duration::from_secs(60)))
         }
         ("POST", "/api/auth/refresh") => Some(("refresh", 30, Duration::from_secs(60))),
         ("POST", "/api/vault/unseal") => Some(("vault-unseal", 5, Duration::from_secs(300))),
-        ("POST", "/api/admin/oidc/providers") => {
-            Some(("admin-oidc", 30, Duration::from_secs(60)))
-        }
+        ("POST", "/api/admin/oidc/providers") => Some(("admin-oidc", 30, Duration::from_secs(60))),
         ("PUT", path) if path.starts_with("/api/admin/oidc/providers/") => {
             Some(("admin-oidc", 30, Duration::from_secs(60)))
         }
@@ -514,6 +519,7 @@ fn rate_limit_bucket(method: &Method, path: &str) -> Option<(&'static str, usize
             Some(("admin-oidc", 30, Duration::from_secs(60)))
         }
         ("POST", "/api/agents") => Some(("agents-create", 20, Duration::from_secs(60))),
+        ("POST", "/api/orion/egress") => Some(("orion-egress", 120, Duration::from_secs(60))),
         ("POST", path) if path.starts_with("/api/agents/") && path.ends_with("/skills/checkin") => {
             Some(("skill-checkin", 30, Duration::from_secs(60)))
         }
@@ -561,6 +567,24 @@ mod tests {
         assert_eq!(parse_bool("true"), Some(true));
         assert_eq!(parse_bool("OFF"), Some(false));
         assert_eq!(parse_bool("maybe"), None);
+    }
+
+    #[test]
+    fn orion_machine_paths_are_csrf_scoped() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer token"),
+        );
+        assert!(super::is_orion_machine_request(
+            "/api/orion/egress",
+            &headers
+        ));
+        assert!(!super::is_orion_machine_request("/api/agents", &headers));
+        assert!(!super::is_orion_machine_request(
+            "/api/orion/egress",
+            &HeaderMap::new()
+        ));
     }
 
     #[tokio::test]

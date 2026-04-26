@@ -15,29 +15,29 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         // Authenticated user routes
         .route("/api/skills", get(list_skills))
-        .route("/api/skills/{id}", get(get_skill))
-        .route("/api/skills/{id}/reviews", get(list_skill_reviews))
+        .route("/api/skills/:id", get(get_skill))
+        .route("/api/skills/:id/reviews", get(list_skill_reviews))
         .route(
-            "/api/skills/bindings/{id}/reviews",
+            "/api/skills/bindings/:id/reviews",
             get(list_binding_reviews),
         )
-        .route("/api/agents/{agent_id}/skills", get(list_agent_skills))
+        .route("/api/agents/:agent_id/skills", get(list_agent_skills))
         .route(
-            "/api/agents/{agent_id}/skills/checkin",
+            "/api/agents/:agent_id/skills/checkin",
             post(agent_skill_checkin),
         )
         // Admin routes
         .route("/api/admin/skills", post(admin_create_skill))
-        .route("/api/admin/skills/{id}", put(admin_update_skill))
-        .route("/api/admin/skills/{id}", delete(admin_delete_skill))
-        .route("/api/admin/skills/{id}/review", post(admin_review_skill))
+        .route("/api/admin/skills/:id", put(admin_update_skill))
+        .route("/api/admin/skills/:id", delete(admin_delete_skill))
+        .route("/api/admin/skills/:id/review", post(admin_review_skill))
         .route("/api/admin/skills/pending", get(admin_list_pending_skills))
         .route(
             "/api/admin/skills/bindings/pending",
             get(admin_list_pending_bindings),
         )
         .route(
-            "/api/admin/skills/bindings/{id}/review",
+            "/api/admin/skills/bindings/:id/review",
             post(admin_review_binding),
         )
 }
@@ -235,9 +235,7 @@ async fn agent_skill_checkin(
                     action: review_action.to_string(),
                     reviewer_user_id: None,
                     policy_score: Some(policy.score as i32),
-                    policy_details: Some(
-                        serde_json::to_value(&policy.checks).unwrap_or(json!([])),
-                    ),
+                    policy_details: Some(serde_json::to_value(&policy.checks).unwrap_or(json!([]))),
                     notes: None,
                 },
             )
@@ -443,9 +441,7 @@ async fn admin_create_skill(
                     action: "manual_approve".to_string(),
                     reviewer_user_id: Some(admin.user_id),
                     policy_score: Some(policy.score as i32),
-                    policy_details: Some(
-                        serde_json::to_value(&policy.checks).unwrap_or(json!([])),
-                    ),
+                    policy_details: Some(serde_json::to_value(&policy.checks).unwrap_or(json!([]))),
                     notes: Some("Admin-created skill, auto-approved".to_string()),
                 },
             )

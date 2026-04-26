@@ -12,25 +12,28 @@ pub struct AgentRow {
     pub capabilities: serde_json::Value,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
+    pub default_provider: Option<String>,
+    pub default_id_model: Option<String>,
+    pub default_ego_model: Option<String>,
 }
+
+const SELECT_COLS: &str = "owner_user_id, id, name, public_key, state, capabilities, created_at, updated_at, default_provider, default_id_model, default_ego_model";
 
 pub async fn list_agents(
     pool: &PgPool,
     owner_filter: Option<Uuid>,
 ) -> Result<Vec<AgentRow>, sqlx::Error> {
     if let Some(owner_user_id) = owner_filter {
-        sqlx::query_as::<_, AgentRow>(
-            "SELECT owner_user_id, id, name, public_key, state, capabilities, created_at, updated_at \
-             FROM agents WHERE owner_user_id = $1 ORDER BY created_at",
-        )
+        sqlx::query_as::<_, AgentRow>(&format!(
+            "SELECT {SELECT_COLS} FROM agents WHERE owner_user_id = $1 ORDER BY created_at"
+        ))
         .bind(owner_user_id)
         .fetch_all(pool)
         .await
     } else {
-        sqlx::query_as::<_, AgentRow>(
-            "SELECT owner_user_id, id, name, public_key, state, capabilities, created_at, updated_at \
-             FROM agents ORDER BY created_at",
-        )
+        sqlx::query_as::<_, AgentRow>(&format!(
+            "SELECT {SELECT_COLS} FROM agents ORDER BY created_at"
+        ))
         .fetch_all(pool)
         .await
     }
@@ -40,25 +43,43 @@ pub async fn create_agent(
     pool: &PgPool,
     owner_user_id: Uuid,
     name: &str,
+    default_provider: Option<&str>,
+    default_id_model: Option<&str>,
+    default_ego_model: Option<&str>,
 ) -> Result<AgentRow, sqlx::Error> {
-    sqlx::query_as::<_, AgentRow>(
-        "INSERT INTO agents (owner_user_id, name) VALUES ($1, $2) \
-         RETURNING owner_user_id, id, name, public_key, state, capabilities, created_at, updated_at",
-    )
+    sqlx::query_as::<_, AgentRow>(&format!(
+        "INSERT INTO agents (owner_user_id, name, default_provider, default_id_model, default_ego_model) \
+         VALUES ($1, $2, $3, $4, $5) RETURNING {SELECT_COLS}"
+    ))
     .bind(owner_user_id)
     .bind(name)
+    .bind(default_provider)
+    .bind(default_id_model)
+    .bind(default_ego_model)
     .fetch_one(pool)
     .await
 }
 
 pub async fn get_agent(pool: &PgPool, id: Uuid) -> Result<Option<AgentRow>, sqlx::Error> {
-    sqlx::query_as::<_, AgentRow>(
-        "SELECT owner_user_id, id, name, public_key, state, capabilities, created_at, updated_at \
-         FROM agents WHERE id = $1",
-    )
+    sqlx::query_as::<_, AgentRow>(&format!(
+        "SELECT {SELECT_COLS} FROM agents WHERE id = $1"
+    ))
     .bind(id)
     .fetch_optional(pool)
     .await
+}
+
+pub async fn last_egress_at(
+    pool: &PgPool,
+    agent_id: Uuid,
+) -> Result<Option<chrono::DateTime<chrono::Utc>>, sqlx::Error> {
+    let row: Option<(Option<chrono::DateTime<chrono::Utc>>,)> = sqlx::query_as(
+        "SELECT MAX(created_at) FROM orion_egress_events WHERE agent_id = $1",
+    )
+    .bind(agent_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.and_then(|r| r.0))
 }
 
 pub async fn delete_agent(pool: &PgPool, id: Uuid) -> Result<bool, sqlx::Error> {

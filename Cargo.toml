@@ -40,3 +40,4 @@ webauthn-rs = "0.5"
 webauthn-rs-proto = "0.5"
 openidconnect = { version = "4", default-features = false, features = ["reqwest", "rustls-tls"] }
 url = "2"
+zip = { version = "2", default-features = false, features = ["deflate"] }

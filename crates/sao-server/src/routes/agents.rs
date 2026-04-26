@@ -1,7 +1,7 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
-    routing::{delete, get, post},
+    routing::{get, post},
     Json, Router,
 };
 use serde::Deserialize;
@@ -16,8 +16,17 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/agents", get(list_agents))
         .route("/api/agents", post(create_agent))
-        .route("/api/agents/{id}", get(get_agent_status))
-        .route("/api/agents/{id}", delete(delete_agent_handler))
+        .route(
+            "/api/agents/:id/delete",
+            post(delete_agent_handler).delete(delete_agent_handler),
+        )
+        .route(
+            "/api/agents/:id",
+            get(get_agent_status)
+                .delete(delete_agent_handler)
+                .post(delete_agent_handler),
+        )
+        .route("/api/agents/:id/events", get(list_agent_events))
 }
 
 async fn list_agents(user: AuthUser, State(state): State<AppState>) -> (StatusCode, Json<Value>) {
@@ -42,6 +51,12 @@ struct CreateAgentRequest {
     agent_type: Option<String>,
     #[serde(default)]
     pubkey: Option<String>,
+    #[serde(default)]
+    default_provider: Option<String>,
+    #[serde(default)]
+    default_id_model: Option<String>,
+    #[serde(default)]
+    default_ego_model: Option<String>,
 }
 
 async fn create_agent(
@@ -58,8 +73,7 @@ async fn create_agent(
         );
     }
 
-    let (identity_agent_id, agent_dir) = match state.inner.identity_manager.create_agent(name)
-    {
+    let (identity_agent_id, agent_dir) = match state.inner.identity_manager.create_agent(name) {
         Ok(result) => result,
         Err(e) => {
             return (
@@ -87,7 +101,16 @@ async fn create_agent(
         );
     }
 
-    match crate::db::agents::create_agent(&state.inner.db, user.user_id, name).await {
+    match crate::db::agents::create_agent(
+        &state.inner.db,
+        user.user_id,
+        name,
+        req.default_provider.as_deref(),
+        req.default_id_model.as_deref(),
+        req.default_ego_model.as_deref(),
+    )
+    .await
+    {
         Ok(_agent) => {
             let _ = crate::db::audit::insert_audit_log(
                 &state.inner.db,
@@ -160,6 +183,11 @@ async fn get_agent_status(
         );
     }
 
+    let last_heartbeat = crate::db::agents::last_egress_at(&state.inner.db, id)
+        .await
+        .ok()
+        .flatten();
+
     (
         StatusCode::OK,
         Json(json!({
@@ -168,7 +196,10 @@ async fn get_agent_status(
             "documents": ["soul.md", "ethics.md", "org-map.md", "personality.md"],
             "soul_immutable": true,
             "personality_preview": "ego traits (editable by Superego only)",
-            "last_heartbeat": "just now"
+            "default_provider": agent.default_provider,
+            "default_id_model": agent.default_id_model,
+            "default_ego_model": agent.default_ego_model,
+            "last_heartbeat": last_heartbeat,
         })),
     )
 }
@@ -201,6 +232,10 @@ async fn delete_agent_handler(
         );
     }
 
+    let revoked_tokens = crate::auth::agent_tokens::revoke_for_agent(&state.inner.db, id)
+        .await
+        .unwrap_or(0);
+
     match crate::db::agents::delete_agent(&state.inner.db, id).await {
         Ok(true) => {
             let _ = crate::db::audit::insert_audit_log(
@@ -209,7 +244,11 @@ async fn delete_agent_handler(
                 None,
                 "agents.delete",
                 Some("agent"),
-                Some(json!({ "agent_id": id, "request_id": context.request_id })),
+                Some(json!({
+                    "agent_id": id,
+                    "request_id": context.request_id,
+                    "revoked_tokens": revoked_tokens,
+                })),
                 context.client_ip.as_deref(),
                 context.user_agent.as_deref(),
             )
@@ -219,6 +258,61 @@ async fn delete_agent_handler(
         Ok(false) => (
             StatusCode::NOT_FOUND,
             Json(json!({ "error": "Agent not found" })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        ),
+    }
+}
+
+#[derive(Deserialize)]
+struct EventsQuery {
+    #[serde(default)]
+    limit: Option<i64>,
+    #[serde(default)]
+    offset: Option<i64>,
+}
+
+async fn list_agent_events(
+    user: AuthUser,
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Query(q): Query<EventsQuery>,
+) -> (StatusCode, Json<Value>) {
+    let agent = match crate::db::agents::get_agent(&state.inner.db, id).await {
+        Ok(Some(a)) => a,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "Agent not found" })),
+            );
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            );
+        }
+    };
+    if !user.is_admin() && agent.owner_user_id != Some(user.user_id) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "Access denied" })),
+        );
+    }
+
+    let limit = q.limit.unwrap_or(50).clamp(1, 200);
+    let offset = q.offset.unwrap_or(0).max(0);
+
+    match crate::db::orion::list_for_agent(&state.inner.db, id, limit, offset).await {
+        Ok(events) => (
+            StatusCode::OK,
+            Json(json!({
+                "events": events,
+                "limit": limit,
+                "offset": offset,
+            })),
         ),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,

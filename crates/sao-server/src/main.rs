@@ -1,13 +1,15 @@
 mod auth;
 mod db;
+mod llm;
 mod routes;
 mod security;
 mod state;
 mod vault_state;
 
 use anyhow::{bail, Context};
-use axum::Router;
 use axum::middleware;
+use axum::Router;
+use serde_json::json;
 use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 use tracing_subscriber::EnvFilter;
@@ -20,12 +22,168 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
+    match std::env::args().nth(1).as_deref() {
+        Some("bootstrap-local") => return run_local_bootstrap().await,
+        Some("mint-dev-token") => return mint_dev_token().await,
+        _ => {}
+    }
+
     if let Err(error) = run_server().await {
         tracing::error!("SAO server startup failed: {error:#}");
         return Err(error);
     }
 
     Ok(())
+}
+
+async fn mint_dev_token() -> anyhow::Result<()> {
+    require_local_bootstrap_enabled()?;
+    let username = std::env::var("SAO_LOCAL_ADMIN_USERNAME")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "local-admin".to_string());
+    let pool = db::pool::init_pool()
+        .await
+        .context("Failed to initialize the PostgreSQL connection pool")?;
+    let user = db::users::get_user_by_username(&pool, &username)
+        .await
+        .context("Failed to query local admin user")?
+        .with_context(|| {
+            format!("Local user {username} was not found; run bootstrap-local first")
+        })?;
+    let jwt_secret = auth::session::jwt_secret();
+    let token =
+        auth::session::create_access_token(user.id, &user.username, &user.role, &jwt_secret)
+            .context("Failed to create local development bearer token")?;
+    println!("{token}");
+    Ok(())
+}
+
+async fn run_local_bootstrap() -> anyhow::Result<()> {
+    require_local_bootstrap_enabled()?;
+    tracing::info!("Starting SAO local development bootstrap");
+
+    let pool = db::pool::init_pool()
+        .await
+        .context("Failed to initialize the PostgreSQL connection pool")?;
+    db::migrate::run_migrations(&pool)
+        .await
+        .context("Failed while applying database migrations")?;
+
+    let passphrase = required_env("SAO_LOCAL_VAULT_PASSPHRASE")?;
+    let username = std::env::var("SAO_LOCAL_ADMIN_USERNAME")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "local-admin".to_string());
+    let display_name = std::env::var("SAO_LOCAL_ADMIN_DISPLAY_NAME")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "Local SAO Admin".to_string());
+
+    let vault_initialized = db::vault_key::vmk_exists(&pool)
+        .await
+        .context("Failed to inspect vault master key state")?;
+    if !vault_initialized {
+        initialize_local_vault(&pool, &passphrase).await?;
+        tracing::info!("Initialized local development vault");
+    } else {
+        tracing::info!("Local development vault already initialized");
+    }
+
+    let user_id = match db::users::get_user_by_username(&pool, &username)
+        .await
+        .context("Failed to inspect local admin user")?
+    {
+        Some(user) => {
+            if user.role != "admin" {
+                db::users::update_user_role(&pool, user.id, "admin")
+                    .await
+                    .context("Failed to promote local bootstrap user to admin")?;
+            }
+            user.id
+        }
+        None => db::users::create_user(&pool, &username, Some(&display_name), "admin")
+            .await
+            .context("Failed to create local bootstrap admin user")?,
+    };
+
+    let _ = db::audit::insert_audit_log(
+        &pool,
+        Some(user_id),
+        None,
+        "local.bootstrap",
+        Some("setup"),
+        Some(json!({
+            "username": username,
+            "vault_initialized": !vault_initialized,
+            "mode": "local_development",
+        })),
+        None,
+        Some("sao-server bootstrap-local"),
+    )
+    .await;
+
+    println!("SAO local bootstrap complete.");
+    println!("Admin user: {username}");
+    println!("Vault: initialized");
+    println!("Next: open http://localhost:3100 or register a WebAuthn credential for {username}.");
+    Ok(())
+}
+
+async fn initialize_local_vault(pool: &sqlx::PgPool, passphrase: &str) -> anyhow::Result<()> {
+    let vmk = sao_core::vault::VaultMasterKey::generate();
+    let salt = sao_core::vault::generate_salt();
+    let passphrase_key = sao_core::vault::derive_key_from_passphrase(
+        passphrase,
+        &salt,
+        sao_core::vault::kdf::DEFAULT_MEMORY_COST,
+        sao_core::vault::kdf::DEFAULT_TIME_COST,
+        sao_core::vault::kdf::DEFAULT_PARALLELISM,
+    )
+    .map_err(|error| anyhow::anyhow!("Failed to derive local vault passphrase key: {error}"))?;
+    let (sealed, nonce) = vmk
+        .seal(&passphrase_key)
+        .map_err(|error| anyhow::anyhow!("Failed to seal local vault master key: {error}"))?;
+    let mut envelope = sealed;
+    envelope.extend_from_slice(&nonce);
+
+    db::vault_key::insert_vmk(
+        pool,
+        &envelope,
+        &salt,
+        sao_core::vault::kdf::DEFAULT_MEMORY_COST as i32,
+        sao_core::vault::kdf::DEFAULT_TIME_COST as i32,
+        sao_core::vault::kdf::DEFAULT_PARALLELISM as i32,
+    )
+    .await
+    .context("Failed to store local vault master key envelope")
+}
+
+fn require_local_bootstrap_enabled() -> anyhow::Result<()> {
+    let enabled = std::env::var("SAO_LOCAL_BOOTSTRAP")
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes"
+            )
+        })
+        .unwrap_or(false);
+    if !enabled {
+        bail!("Refusing local bootstrap unless SAO_LOCAL_BOOTSTRAP=true is set");
+    }
+    Ok(())
+}
+
+fn required_env(name: &str) -> anyhow::Result<String> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .with_context(|| format!("{name} must be set for local bootstrap"))
 }
 
 async fn run_server() -> anyhow::Result<()> {
@@ -76,6 +234,7 @@ async fn run_server() -> anyhow::Result<()> {
         .allow_headers(AllowHeaders::list([
             axum::http::header::CONTENT_TYPE,
             axum::http::header::ACCEPT,
+            axum::http::header::AUTHORIZATION,
             axum::http::header::COOKIE,
             axum::http::header::SET_COOKIE,
             axum::http::HeaderName::from_static(security::CSRF_HEADER),

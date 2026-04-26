@@ -2,11 +2,13 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import {
+  localWebauthnRegisterFinish,
+  localWebauthnRegisterStart,
   webauthnLoginStart,
   webauthnLoginFinish,
   listAuthOidcProviders,
 } from '../api/auth';
-import { beginAuthentication } from '../lib/webauthn';
+import { beginAuthentication, beginRegistration } from '../lib/webauthn';
 import type { OidcProvider } from '../types';
 
 export default function Login() {
@@ -16,7 +18,9 @@ export default function Login() {
 
   const [username, setUsername] = useState('');
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [loading, setLoading] = useState(false);
+  const [registering, setRegistering] = useState(false);
   const [oidcProviders, setOidcProviders] = useState<OidcProvider[]>([]);
 
   const from = (location.state as { from?: { pathname: string } })?.from?.pathname || '/';
@@ -39,6 +43,7 @@ export default function Login() {
 
   const handleWebAuthnLogin = async () => {
     setError('');
+    setNotice('');
     setLoading(true);
     try {
       const requestedUsername = username.trim();
@@ -57,6 +62,32 @@ export default function Login() {
       );
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleLocalRegistration = async () => {
+    setError('');
+    setNotice('');
+    setRegistering(true);
+    try {
+      const requestedUsername = username.trim() || undefined;
+      const { challenge_id, options } = await localWebauthnRegisterStart(
+        requestedUsername,
+      );
+      const credential = await beginRegistration(options as never);
+      await localWebauthnRegisterFinish(challenge_id, credential);
+      setUsername(requestedUsername || 'local-admin');
+      setNotice(
+        'Windows Hello registered. You can now log in with Windows Hello.',
+      );
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Windows Hello registration failed. Please try again.',
+      );
+    } finally {
+      setRegistering(false);
     }
   };
 
@@ -107,7 +138,7 @@ export default function Login() {
             {/* WebAuthn Login */}
             <button
               onClick={handleWebAuthnLogin}
-              disabled={loading}
+              disabled={loading || registering}
               className="w-full px-4 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-800 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
             >
               {loading ? (
@@ -120,9 +151,30 @@ export default function Login() {
               )}
             </button>
 
+            <button
+              onClick={handleLocalRegistration}
+              disabled={loading || registering}
+              className="w-full px-4 py-2.5 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:cursor-not-allowed text-gray-100 font-medium rounded-lg transition-colors border border-gray-600"
+            >
+              {registering
+                ? 'Registering Windows Hello...'
+                : 'Register Windows Hello for local admin'}
+            </button>
+
+            <p className="text-xs text-gray-500 -mt-2">
+              Local development only. Leave username blank to register the
+              bootstrapped local admin account.
+            </p>
+
             {error && (
               <div className="p-3 bg-red-900/30 border border-red-800 rounded-lg">
                 <p className="text-red-400 text-sm">{error}</p>
+              </div>
+            )}
+
+            {notice && (
+              <div className="p-3 bg-emerald-900/25 border border-emerald-800 rounded-lg">
+                <p className="text-emerald-300 text-sm">{notice}</p>
               </div>
             )}
 
