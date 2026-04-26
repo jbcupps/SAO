@@ -27,13 +27,16 @@ services:
       SAO_OIDC_SCOPES: ${SAO_OIDC_SCOPES:-openid profile email}
       # Used by /api/agents/:id/bundle to embed the right SAO URL in the entity config.json.
       SAO_PUBLIC_BASE_URL: ${SAO_PUBLIC_BASE_URL:-http://localhost:3100}
-      # Path *inside the container* to the OrionII installer; only meaningful when the
-      # installer directory is mounted via SAO_ORION_INSTALLER_DIR (see volumes below).
+      # Optional legacy path: explicit MSI path inside the container, only used when no
+      # installer source is registered under /admin/installer-sources. Newer setups should
+      # register a source instead — SAO will download + sha-verify + cache automatically.
       SAO_ORION_INSTALLER_PATH: ${SAO_ORION_INSTALLER_PATH:-/installer/${SAO_ORION_INSTALLER_FILENAME:-OrionII_0.1.0_x64_en-US.msi}}
     volumes:
+      # `sao-data` holds: jwt_secret.bin, installer cache (installers/<sha>/<filename>),
+      # and any other durable runtime state.
       - sao-data:/data/sao
-      # Mount the host directory containing the OrionII MSI so the bundle endpoint can read it.
-      # Set SAO_ORION_INSTALLER_DIR to the absolute host path (e.g., the bundle/msi output dir).
+      # Optional: mount a host directory containing the OrionII MSI when running in the
+      # legacy env-var flow. Self-serve installer sources don't need this.
       - ${SAO_ORION_INSTALLER_DIR:-./empty-installer-mount}:/installer:ro
     depends_on:
       db:

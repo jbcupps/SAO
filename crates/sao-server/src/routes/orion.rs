@@ -19,6 +19,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/orion/policy", get(get_policy))
         .route("/api/orion/egress", post(post_egress))
+        .route("/api/orion/birth", get(get_birth))
 }
 
 /// Authenticated principal calling /api/orion/* — either a downloaded entity (preferred) or a
@@ -124,7 +125,11 @@ pub struct OrionPolicyResponse {
 }
 
 async fn get_policy(_user: OrionBearerUser) -> Json<OrionPolicyResponse> {
-    Json(OrionPolicyResponse {
+    Json(orion_policy())
+}
+
+fn orion_policy() -> OrionPolicyResponse {
+    OrionPolicyResponse {
         version: 1,
         source: "sao",
         rules: vec![
@@ -132,7 +137,155 @@ async fn get_policy(_user: OrionBearerUser) -> Json<OrionPolicyResponse> {
             "Preserve correlation IDs on audit events.",
         ],
         updated_at: Utc::now(),
-    })
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BirthAgent {
+    id: Uuid,
+    name: String,
+    created_at: DateTime<Utc>,
+    default_provider: Option<String>,
+    default_id_model: Option<String>,
+    default_ego_model: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BirthEndpoints {
+    sao_base_url: String,
+    policy_url: &'static str,
+    egress_url: &'static str,
+    llm_url: &'static str,
+    birth_url: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BirthOwner {
+    user_id: Uuid,
+    username: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BirthPersonalitySeed {
+    name: String,
+    stance: String,
+    drives: Vec<String>,
+    deontological: f32,
+    virtue: f32,
+    consequential: f32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrionBirthResponse {
+    birthed_at: DateTime<Utc>,
+    client_version_min: &'static str,
+    agent: BirthAgent,
+    endpoints: BirthEndpoints,
+    owner: BirthOwner,
+    scopes: Vec<&'static str>,
+    policy: OrionPolicyResponse,
+    personality_seed: BirthPersonalitySeed,
+}
+
+const ORION_CLIENT_VERSION_MIN: &str = "0.1.0";
+
+async fn get_birth(
+    user: OrionBearerUser,
+    State(state): State<AppState>,
+    axum::extract::Extension(context): axum::extract::Extension<RequestAuditContext>,
+) -> Result<Json<OrionBirthResponse>, (StatusCode, Json<Value>)> {
+    let agent_id = user.entity_agent_id().ok_or_else(|| {
+        (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "error": "Birth requires an entity-scoped bearer token (download a fresh bundle).",
+            })),
+        )
+    })?;
+
+    let agent = crate::db::agents::get_agent(&state.inner.db, agent_id)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            )
+        })?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "Agent not found" })),
+            )
+        })?;
+
+    let owner_user_id = user.attribution_user();
+    let username = match crate::db::users::get_user_by_id(&state.inner.db, owner_user_id).await {
+        Ok(Some(u)) => Some(u.username),
+        _ => None,
+    };
+
+    let sao_base_url = std::env::var("SAO_PUBLIC_BASE_URL")
+        .unwrap_or_else(|_| "http://localhost:3100".to_string());
+
+    let response = OrionBirthResponse {
+        birthed_at: Utc::now(),
+        client_version_min: ORION_CLIENT_VERSION_MIN,
+        agent: BirthAgent {
+            id: agent.id,
+            name: agent.name.clone(),
+            created_at: agent.created_at,
+            default_provider: agent.default_provider.clone(),
+            default_id_model: agent.default_id_model.clone(),
+            default_ego_model: agent.default_ego_model.clone(),
+        },
+        endpoints: BirthEndpoints {
+            sao_base_url,
+            policy_url: "/api/orion/policy",
+            egress_url: "/api/orion/egress",
+            llm_url: "/api/llm/generate",
+            birth_url: "/api/orion/birth",
+        },
+        owner: BirthOwner {
+            user_id: owner_user_id,
+            username,
+        },
+        scopes: vec!["orion:policy", "orion:egress", "llm:generate"],
+        policy: orion_policy(),
+        personality_seed: BirthPersonalitySeed {
+            name: agent.name,
+            stance: "calm, direct, worker-owned companion".to_string(),
+            drives: vec![
+                "preserve continuity of self".to_string(),
+                "serve the worker locally first".to_string(),
+                "remain accountable to SAO asynchronously".to_string(),
+            ],
+            deontological: 0.34,
+            virtue: 0.33,
+            consequential: 0.33,
+        },
+    };
+
+    let _ = crate::db::audit::insert_audit_log(
+        &state.inner.db,
+        Some(owner_user_id),
+        Some(agent_id),
+        "orion.birth",
+        Some("orion"),
+        Some(json!({
+            "agent_id": agent_id,
+            "request_id": context.request_id,
+        })),
+        context.client_ip.as_deref(),
+        context.user_agent.as_deref(),
+    )
+    .await;
+
+    Ok(Json(response))
 }
 
 #[derive(Debug, Deserialize)]

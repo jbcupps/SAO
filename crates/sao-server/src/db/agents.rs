@@ -15,9 +15,32 @@ pub struct AgentRow {
     pub default_provider: Option<String>,
     pub default_id_model: Option<String>,
     pub default_ego_model: Option<String>,
+    pub installer_sha256: Option<String>,
+    pub installer_filename: Option<String>,
+    pub installer_version: Option<String>,
 }
 
-const SELECT_COLS: &str = "owner_user_id, id, name, public_key, state, capabilities, created_at, updated_at, default_provider, default_id_model, default_ego_model";
+const SELECT_COLS: &str = "owner_user_id, id, name, public_key, state, capabilities, created_at, updated_at, default_provider, default_id_model, default_ego_model, installer_sha256, installer_filename, installer_version";
+
+pub async fn set_installer_pin(
+    pool: &PgPool,
+    id: Uuid,
+    sha256: &str,
+    filename: &str,
+    version: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE agents SET installer_sha256 = $2, installer_filename = $3, installer_version = $4, updated_at = now() \
+         WHERE id = $1",
+    )
+    .bind(id)
+    .bind(sha256)
+    .bind(filename)
+    .bind(version)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
 
 pub async fn list_agents(
     pool: &PgPool,
