@@ -1,5 +1,6 @@
 mod auth;
 mod db;
+mod installers;
 mod llm;
 mod routes;
 mod security;

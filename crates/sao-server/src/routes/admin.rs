@@ -40,6 +40,21 @@ pub fn routes() -> Router<AppState> {
             "/api/admin/llm-providers/:provider/test",
             post(test_llm_provider),
         )
+        // OrionII installer source registry (admin only)
+        .route("/api/admin/installer-sources", get(list_installer_sources))
+        .route("/api/admin/installer-sources", post(create_installer_source))
+        .route(
+            "/api/admin/installer-sources/probe",
+            post(probe_installer_source),
+        )
+        .route(
+            "/api/admin/installer-sources/:id",
+            delete(delete_installer_source),
+        )
+        .route(
+            "/api/admin/installer-sources/:id/set-default",
+            post(set_default_installer_source),
+        )
 }
 
 const SUPPORTED_PROVIDERS: &[&str] =
@@ -752,6 +767,212 @@ async fn test_llm_provider(
                 "latency_ms": latency_ms,
                 "error": e.to_string(),
             })),
+        ),
+    }
+}
+
+// --- OrionII installer source registry ---
+
+async fn list_installer_sources(
+    AdminUser(_admin): AdminUser,
+    State(state): State<AppState>,
+) -> (StatusCode, Json<Value>) {
+    match crate::db::installer_sources::list(&state.inner.db).await {
+        Ok(rows) => (StatusCode::OK, Json(json!({ "sources": rows }))),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        ),
+    }
+}
+
+#[derive(Deserialize)]
+struct ProbeInstallerRequest {
+    url: String,
+}
+
+/// Compute the sha256 of an upstream URL without persisting anything. Lets the admin
+/// confirm the hash before they commit it as `expected_sha256`.
+async fn probe_installer_source(
+    AdminUser(_admin): AdminUser,
+    Json(req): Json<ProbeInstallerRequest>,
+) -> (StatusCode, Json<Value>) {
+    if req.url.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "url is required" })),
+        );
+    }
+    match crate::installers::sha256_of_url(req.url.trim()).await {
+        Ok(sha) => (
+            StatusCode::OK,
+            Json(json!({ "url": req.url, "sha256": sha })),
+        ),
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({ "error": e.to_string() })),
+        ),
+    }
+}
+
+#[derive(Deserialize)]
+struct CreateInstallerRequest {
+    #[serde(default = "default_kind")]
+    kind: String,
+    url: String,
+    filename: String,
+    version: String,
+    expected_sha256: String,
+    #[serde(default)]
+    is_default: bool,
+}
+
+fn default_kind() -> String {
+    "orion-msi".to_string()
+}
+
+async fn create_installer_source(
+    AdminUser(admin): AdminUser,
+    State(state): State<AppState>,
+    Json(req): Json<CreateInstallerRequest>,
+) -> (StatusCode, Json<Value>) {
+    if req.kind != "orion-msi" {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Only kind=orion-msi is supported today" })),
+        );
+    }
+    for (name, value) in [
+        ("url", &req.url),
+        ("filename", &req.filename),
+        ("version", &req.version),
+        ("expected_sha256", &req.expected_sha256),
+    ] {
+        if value.trim().is_empty() {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": format!("{name} is required") })),
+            );
+        }
+    }
+    if req.expected_sha256.trim().len() != 64
+        || !req.expected_sha256.chars().all(|c| c.is_ascii_hexdigit())
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "expected_sha256 must be a 64-char hex digest" })),
+        );
+    }
+
+    let row = match crate::db::installer_sources::insert(
+        &state.inner.db,
+        &req.kind,
+        req.url.trim(),
+        req.filename.trim(),
+        req.version.trim(),
+        &req.expected_sha256.trim().to_lowercase(),
+        req.is_default,
+        admin.user_id,
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            );
+        }
+    };
+
+    // Pre-warm the cache so the next bundle download is instant. Failure here is non-fatal.
+    let pre_warm = match crate::installers::fetch_or_cache(&row).await {
+        Ok(path) => json!({ "ok": true, "cache_path": path.display().to_string() }),
+        Err(e) => json!({ "ok": false, "error": e.to_string() }),
+    };
+
+    let _ = crate::db::audit::insert_audit_log(
+        &state.inner.db,
+        Some(admin.user_id),
+        None,
+        "admin.installer_sources.create",
+        Some("installer_source"),
+        Some(json!({
+            "id": row.id,
+            "kind": row.kind,
+            "version": row.version,
+            "is_default": row.is_default,
+            "pre_warm": pre_warm,
+        })),
+        None,
+        None,
+    )
+    .await;
+
+    (
+        StatusCode::CREATED,
+        Json(json!({ "source": row, "pre_warm": pre_warm })),
+    )
+}
+
+async fn delete_installer_source(
+    AdminUser(admin): AdminUser,
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> (StatusCode, Json<Value>) {
+    match crate::db::installer_sources::delete(&state.inner.db, id).await {
+        Ok(true) => {
+            let _ = crate::db::audit::insert_audit_log(
+                &state.inner.db,
+                Some(admin.user_id),
+                None,
+                "admin.installer_sources.delete",
+                Some("installer_source"),
+                Some(json!({ "id": id })),
+                None,
+                None,
+            )
+            .await;
+            (StatusCode::OK, Json(json!({ "deleted": true })))
+        }
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "Installer source not found" })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        ),
+    }
+}
+
+async fn set_default_installer_source(
+    AdminUser(admin): AdminUser,
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> (StatusCode, Json<Value>) {
+    match crate::db::installer_sources::set_default(&state.inner.db, id).await {
+        Ok(Some(row)) => {
+            let _ = crate::db::audit::insert_audit_log(
+                &state.inner.db,
+                Some(admin.user_id),
+                None,
+                "admin.installer_sources.set_default",
+                Some("installer_source"),
+                Some(json!({ "id": row.id, "kind": row.kind, "version": row.version })),
+                None,
+                None,
+            )
+            .await;
+            (StatusCode::OK, Json(json!({ "source": row })))
+        }
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "Installer source not found" })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
         ),
     }
 }

@@ -101,7 +101,7 @@ async fn create_agent(
         );
     }
 
-    match crate::db::agents::create_agent(
+    let created = match crate::db::agents::create_agent(
         &state.inner.db,
         user.user_id,
         name,
@@ -111,49 +111,83 @@ async fn create_agent(
     )
     .await
     {
-        Ok(_agent) => {
-            let _ = crate::db::audit::insert_audit_log(
-                &state.inner.db,
-                Some(user.user_id),
-                None,
-                "agents.create",
-                Some("agent"),
-                Some(json!({
-                    "name": name,
-                    "identity_agent_id": identity_agent_id,
-                    "documents": ["soul.md", "ethics.md", "org-map.md", "personality.md"],
-                    "request_id": context.request_id,
-                })),
-                context.client_ip.as_deref(),
-                context.user_agent.as_deref(),
-            )
-            .await;
-            crate::db::audit::log_birth_event(&identity_agent_id);
-            let ethic_preview =
-                sao_core::ethical_bridge::get_triangleethic_preview(&identity_agent_id);
-            (
-                StatusCode::CREATED,
-                Json(json!({
-                    "status": "READY",
-                    "documents": ["soul.md", "ethics.md", "org-map.md", "personality.md"],
-                    "soul_immutable": true,
-                    "personality_preview": "default ego traits loaded - Superego will evolve this later",
-                    "triangleethic_preview": ethic_preview,
-                })),
-            )
-        }
+        Ok(agent) => agent,
         Err(e) => {
             let _ = state
                 .inner
                 .identity_manager
                 .remove_agent(&identity_agent_id);
             let _ = std::fs::remove_dir_all(&agent_dir);
-            (
+            return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({ "error": e.to_string() })),
-            )
+            );
+        }
+    };
+
+    // Pull-on-create: if a default OrionII installer source is configured, fetch it
+    // (cached by sha) and pin those coordinates to this agent. Bundle download serves the
+    // pinned copy, so re-rolling the default later doesn't break old agents.
+    let mut installer_status = serde_json::Value::Null;
+    if let Ok(Some(source)) =
+        crate::db::installer_sources::get_default(&state.inner.db, "orion-msi").await
+    {
+        match crate::installers::fetch_or_cache(&source).await {
+            Ok(_path) => {
+                let _ = crate::db::agents::set_installer_pin(
+                    &state.inner.db,
+                    created.id,
+                    &source.expected_sha256,
+                    &source.filename,
+                    &source.version,
+                )
+                .await;
+                installer_status = json!({
+                    "pinned": true,
+                    "version": source.version,
+                    "sha256": source.expected_sha256,
+                    "filename": source.filename,
+                });
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, agent_id = %created.id, "Failed to pin installer for new agent");
+                installer_status = json!({ "pinned": false, "error": e.to_string() });
+            }
         }
     }
+
+    let _ = crate::db::audit::insert_audit_log(
+        &state.inner.db,
+        Some(user.user_id),
+        None,
+        "agents.create",
+        Some("agent"),
+        Some(json!({
+            "name": name,
+            "identity_agent_id": identity_agent_id,
+            "documents": ["soul.md", "ethics.md", "org-map.md", "personality.md"],
+            "installer": installer_status,
+            "request_id": context.request_id,
+        })),
+        context.client_ip.as_deref(),
+        context.user_agent.as_deref(),
+    )
+    .await;
+    crate::db::audit::log_birth_event(&identity_agent_id);
+    let ethic_preview =
+        sao_core::ethical_bridge::get_triangleethic_preview(&identity_agent_id);
+    (
+        StatusCode::CREATED,
+        Json(json!({
+            "status": "READY",
+            "agent_id": created.id,
+            "documents": ["soul.md", "ethics.md", "org-map.md", "personality.md"],
+            "soul_immutable": true,
+            "personality_preview": "default ego traits loaded - Superego will evolve this later",
+            "triangleethic_preview": ethic_preview,
+            "installer": installer_status,
+        })),
+    )
 }
 
 async fn get_agent_status(

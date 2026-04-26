@@ -65,6 +65,31 @@ export interface UpdateLlmProviderData {
   api_key?: string;
 }
 
+export interface InstallerSource {
+  id: string;
+  kind: 'orion-msi';
+  url: string;
+  filename: string;
+  version: string;
+  expected_sha256: string;
+  is_default: boolean;
+  enabled: boolean;
+  created_at: string;
+}
+
+export interface ProbeInstallerResult {
+  url: string;
+  sha256: string;
+}
+
+export interface CreateInstallerSourceData {
+  url: string;
+  filename: string;
+  version: string;
+  expected_sha256: string;
+  is_default?: boolean;
+}
+
 export interface AgentEgressEvent {
   event_id: string;
   user_id: string;

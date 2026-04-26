@@ -15,6 +15,7 @@ import AuditLogPage from './pages/AuditLogPage';
 import SkillsCatalogPage from './pages/SkillsCatalogPage';
 import AdminSkillReviewPage from './pages/AdminSkillReviewPage';
 import AdminLlmProvidersPage from './pages/AdminLlmProvidersPage';
+import AdminInstallerSourcesPage from './pages/AdminInstallerSourcesPage';
 import AgentEventsPage from './pages/AgentEventsPage';
 
 function AppRoutes() {
@@ -95,6 +96,14 @@ function AppRoutes() {
           element={
             <ProtectedRoute admin>
               <AdminLlmProvidersPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/admin/installer-sources"
+          element={
+            <ProtectedRoute admin>
+              <AdminInstallerSourcesPage />
             </ProtectedRoute>
           }
         />

@@ -1,6 +1,13 @@
 //! GET /api/agents/:id/bundle — packages a config.json + Tauri MSI installer for the user to
-//! run on their workstation. The config.json carries the entity's identity token and chosen
-//! LLM defaults. The MSI is read from `SAO_ORION_INSTALLER_PATH`.
+//! run on their workstation. The config.json carries the entity's identity token and the
+//! anchor SAO URL. The MSI is read from one of three sources, in order:
+//!
+//!   1. The agent's pinned installer in the local cache
+//!      (`SAO_DATA_DIR/installers/<sha>/<filename>`). If the cache file is missing, SAO
+//!      re-fetches from the original `installer_sources` row by sha lookup.
+//!   2. A freshly-pinned default installer source (covers the case where an agent was
+//!      created before any installer source was registered).
+//!   3. `SAO_ORION_INSTALLER_PATH` env var — the legacy mount-based fallback.
 
 use std::io::{Cursor, Write};
 
@@ -20,6 +27,7 @@ use zip::CompressionMethod;
 
 use crate::auth::agent_tokens;
 use crate::auth::middleware::AuthUser;
+use crate::db::agents::AgentRow;
 use crate::security::RequestAuditContext;
 use crate::state::AppState;
 
@@ -31,7 +39,7 @@ const README_TEXT: &str = "OrionII entity bundle\n\
 =====================\n\
 \n\
 This ZIP contains:\n\
-  config.json            -- Identity token + LLM provider defaults for this entity.\n\
+  config.json            -- SAO base URL + entity identity token (the anchor).\n\
   OrionII-Setup.msi      -- Tauri installer (Windows).\n\
   README-FIRST-RUN.txt   -- this file.\n\
 \n\
@@ -41,12 +49,22 @@ First run\n\
 2. Drop config.json into:\n\
        %APPDATA%\\OrionII\\config.json\n\
    (the installer also accepts it co-located with OrionII.exe).\n\
-3. Launch OrionII. It will adopt the agent_id from config and phone home to SAO.\n\
+3. Launch OrionII. The app will:\n\
+     a. Read the SAO URL + entity token from config.json.\n\
+     b. Call GET {sao_base_url}/api/orion/birth to dynamically receive the\n\
+        live agent metadata, default provider/model, scopes, current policy,\n\
+        and personality seed in a single response.\n\
+     c. Adopt the SAO-assigned identity and start chatting.\n\
+\n\
+Because the runtime config is fetched live, changes the admin makes in SAO\n\
+(switching provider, swapping default model, updating policy) take effect on\n\
+the next OrionII launch -- no re-bundling required.\n\
 \n\
 Security\n\
 --------\n\
-The agent_token is a long-lived bearer credential. Treat config.json like an API key:\n\
-do not share, do not commit. If lost, delete the agent in SAO and download a new bundle.\n";
+The agent_token is a long-lived bearer credential. Treat config.json like an\n\
+API key: do not share, do not commit. If lost, delete the agent in SAO and\n\
+download a new bundle (downloading also revokes any prior tokens for the agent).\n";
 
 async fn download_bundle(
     user: AuthUser,
@@ -89,23 +107,18 @@ async fn download_bundle(
         ));
     }
 
-    let installer_path = std::env::var("SAO_ORION_INSTALLER_PATH").map_err(|_| {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({
-                "error": "OrionII installer is not staged on this SAO instance",
-                "hint": "Set SAO_ORION_INSTALLER_PATH to a built .msi (run npm run tauri build in OrionII)",
-            })),
-        )
-    })?;
-    let installer_bytes = tokio::fs::read(&installer_path).await.map_err(|e| {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({
-                "error": format!("Failed to read installer at {installer_path}: {e}"),
-            })),
-        )
-    })?;
+    let installer_bytes = match resolve_installer(&state, &agent).await {
+        Ok(bytes) => bytes,
+        Err(message) => {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({
+                    "error": message,
+                    "hint": "Register an OrionII installer source under /admin/installer-sources, or set SAO_ORION_INSTALLER_PATH for the legacy mount-based flow.",
+                })),
+            ));
+        }
+    };
 
     // Revoke any prior tokens for this agent before issuing a new one — one live bundle per agent.
     let revoked = agent_tokens::revoke_for_agent(&state.inner.db, id)
@@ -125,14 +138,24 @@ async fn download_bundle(
     let sao_base_url = std::env::var("SAO_PUBLIC_BASE_URL")
         .unwrap_or_else(|_| "http://localhost:3100".to_string());
 
+    // Anchor-only: sao_base_url + agent_token are the minimum the entity needs to bootstrap.
+    // Everything else (provider, models, policy, scopes, personality) comes from the live
+    // GET /api/orion/birth call OrionII makes on every launch. The provider/model fields are
+    // still embedded as a *fallback* for offline-from-SAO mode and for back-compat with
+    // older clients that don't yet call birth.
     let config = json!({
         "sao_base_url": sao_base_url,
         "agent_id": agent.id,
         "agent_token": minted.jwt,
+        "client_version_min": "0.1.0",
+        "fallback": {
+            "default_provider": provider,
+            "default_id_model": id_model,
+            "default_ego_model": ego_model,
+        },
         "default_provider": provider,
         "default_id_model": id_model,
         "default_ego_model": ego_model,
-        "client_version_min": "0.1.0",
     });
 
     let zip_bytes = build_zip(&config, &installer_bytes).map_err(|e| internal(e.to_string()))?;
@@ -209,4 +232,64 @@ fn bad_request(msg: &str) -> (StatusCode, Json<Value>) {
 
 fn not_found(msg: &str) -> (StatusCode, Json<Value>) {
     (StatusCode::NOT_FOUND, Json(json!({ "error": msg })))
+}
+
+/// Resolve the bytes of the OrionII installer for `agent`, walking the three sources in order.
+async fn resolve_installer(state: &AppState, agent: &AgentRow) -> Result<Vec<u8>, String> {
+    // 1. Pinned source — agent already has installer coordinates.
+    if let (Some(sha), Some(filename)) = (&agent.installer_sha256, &agent.installer_filename) {
+        if let Some(path) = crate::installers::cached_path(sha, filename) {
+            if let Ok(bytes) = tokio::fs::read(&path).await {
+                return Ok(bytes);
+            }
+        }
+        // Cache miss — try to refetch from the installer_sources row that matches this sha.
+        if let Ok(rows) = crate::db::installer_sources::list(&state.inner.db).await {
+            if let Some(source) = rows
+                .into_iter()
+                .find(|r| r.expected_sha256.eq_ignore_ascii_case(sha))
+            {
+                match crate::installers::fetch_or_cache(&source).await {
+                    Ok(path) => {
+                        if let Ok(bytes) = tokio::fs::read(&path).await {
+                            return Ok(bytes);
+                        }
+                    }
+                    Err(e) => return Err(format!("Failed to refetch pinned installer: {e}")),
+                }
+            }
+        }
+    }
+
+    // 2. Fall back to the current default — pin opportunistically so this agent stays stable
+    //    on subsequent downloads even if the default rolls forward.
+    if let Ok(Some(source)) =
+        crate::db::installer_sources::get_default(&state.inner.db, "orion-msi").await
+    {
+        match crate::installers::fetch_or_cache(&source).await {
+            Ok(path) => {
+                let _ = crate::db::agents::set_installer_pin(
+                    &state.inner.db,
+                    agent.id,
+                    &source.expected_sha256,
+                    &source.filename,
+                    &source.version,
+                )
+                .await;
+                if let Ok(bytes) = tokio::fs::read(&path).await {
+                    return Ok(bytes);
+                }
+            }
+            Err(e) => return Err(format!("Failed to fetch default installer: {e}")),
+        }
+    }
+
+    // 3. Legacy env-var fallback (file mounted into the container).
+    if let Ok(path) = std::env::var("SAO_ORION_INSTALLER_PATH") {
+        if let Ok(bytes) = tokio::fs::read(&path).await {
+            return Ok(bytes);
+        }
+    }
+
+    Err("OrionII installer is not available. Register an installer source under /admin/installer-sources.".to_string())
 }
