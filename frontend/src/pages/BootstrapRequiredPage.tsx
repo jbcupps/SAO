@@ -7,8 +7,13 @@ interface BootstrapRequiredPageProps {
 export default function BootstrapRequiredPage({
   status,
 }: BootstrapRequiredPageProps) {
-  const command =
+  const commands = status?.recommended_installer?.commands;
+  const powershellCommand =
+    commands?.powershell ||
     status?.recommended_installer?.command ||
+    'cd C:\\Repo\\SAO\ndocker build -f installer/Dockerfile -t sao-installer installer\ndocker run --rm -it -e ANTHROPIC_API_KEY="<your-key>" sao-installer';
+  const bashCommand =
+    commands?.bash ||
     'docker build -f installer/Dockerfile -t sao-installer installer && docker run --rm -it -e ANTHROPIC_API_KEY=<your-key> sao-installer';
 
   return (
@@ -30,10 +35,19 @@ export default function BootstrapRequiredPage({
         <div className="grid gap-0 lg:grid-cols-[1.4fr_1fr]">
           <div className="px-8 py-8 border-b lg:border-b-0 lg:border-r border-slate-800">
             <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-slate-400">
-              One-command start
+              Bootstrap commands
             </h2>
+            <p className="mt-4 text-xs font-semibold uppercase tracking-[0.18em] text-cyan-300">
+              Windows PowerShell
+            </p>
             <pre className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/80 p-5 text-sm text-cyan-100 overflow-x-auto whitespace-pre-wrap">
-              <code>{command}</code>
+              <code>{powershellCommand}</code>
+            </pre>
+            <p className="mt-4 text-xs font-semibold uppercase tracking-[0.18em] text-cyan-300">
+              Bash
+            </p>
+            <pre className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/80 p-5 text-sm text-cyan-100 overflow-x-auto whitespace-pre-wrap">
+              <code>{bashCommand}</code>
             </pre>
             <p className="mt-4 text-sm text-slate-400">
               The installer handles Azure sign-in, subscription targeting,

@@ -68,6 +68,7 @@ export default function Layout() {
               <SidebarLink to="/admin/users" label="Users" icon="[U]" />
               <SidebarLink to="/admin/sso" label="SSO" icon="[S]" />
               <SidebarLink to="/admin/skills/review" label="Skill Reviews" icon="[R]" />
+              <SidebarLink to="/admin/llm-providers" label="LLM Providers" icon="[M]" />
             </>
           )}
         </nav>

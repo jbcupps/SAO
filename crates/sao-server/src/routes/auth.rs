@@ -18,6 +18,14 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/auth/webauthn/register/start", post(register_start))
         .route("/api/auth/webauthn/register/finish", post(register_finish))
+        .route(
+            "/api/auth/webauthn/local/register/start",
+            post(local_register_start),
+        )
+        .route(
+            "/api/auth/webauthn/local/register/finish",
+            post(local_register_finish),
+        )
         .route("/api/auth/webauthn/login/start", post(login_start))
         .route("/api/auth/webauthn/login/finish", post(login_finish))
         .route("/api/auth/refresh", post(refresh_token))
@@ -28,6 +36,80 @@ pub fn routes() -> Router<AppState> {
 #[derive(Deserialize)]
 struct RegisterStartRequest {
     username: String,
+}
+
+#[derive(Deserialize)]
+struct LocalRegisterStartRequest {
+    username: Option<String>,
+}
+
+async fn local_register_start(
+    State(state): State<AppState>,
+    Json(req): Json<LocalRegisterStartRequest>,
+) -> impl IntoResponse {
+    if !local_bootstrap_enabled() {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "Local Windows Hello registration is disabled" })),
+        );
+    }
+
+    let local_username = local_bootstrap_username();
+    let username = req
+        .username
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(&local_username);
+
+    if username != local_username {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": format!("Local Windows Hello registration is only available for {local_username}")
+            })),
+        );
+    }
+
+    let user = match crate::db::users::get_user_by_username(&state.inner.db, username).await {
+        Ok(Some(user)) if user.role == "admin" => user,
+        Ok(Some(_)) => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": "Local bootstrap user must be an admin" })),
+            );
+        }
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({
+                    "error": "Local bootstrap user not found. Run bootstrap-local first."
+                })),
+            );
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            );
+        }
+    };
+
+    start_registration_for_user(state, user).await
+}
+
+async fn local_register_finish(
+    State(state): State<AppState>,
+    Json(req): Json<RegisterFinishRequest>,
+) -> impl IntoResponse {
+    if !local_bootstrap_enabled() {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "Local Windows Hello registration is disabled" })),
+        );
+    }
+
+    finish_registration_for_challenge(state, req).await
 }
 
 async fn register_start(
@@ -58,6 +140,26 @@ async fn register_start(
         }
     };
 
+    start_registration_for_user(state, user).await
+}
+
+#[derive(Deserialize)]
+struct RegisterFinishRequest {
+    challenge_id: String,
+    credential: RegisterPublicKeyCredential,
+}
+
+async fn register_finish(
+    State(state): State<AppState>,
+    Json(req): Json<RegisterFinishRequest>,
+) -> impl IntoResponse {
+    finish_registration_for_challenge(state, req).await
+}
+
+async fn start_registration_for_user(
+    state: AppState,
+    user: crate::db::users::UserRow,
+) -> (StatusCode, Json<serde_json::Value>) {
     let existing_creds =
         match crate::db::webauthn::get_credentials_for_user(&state.inner.db, user.id).await {
             Ok(creds) => creds
@@ -103,16 +205,10 @@ async fn register_start(
     }
 }
 
-#[derive(Deserialize)]
-struct RegisterFinishRequest {
-    challenge_id: String,
-    credential: RegisterPublicKeyCredential,
-}
-
-async fn register_finish(
-    State(state): State<AppState>,
-    Json(req): Json<RegisterFinishRequest>,
-) -> impl IntoResponse {
+async fn finish_registration_for_challenge(
+    state: AppState,
+    req: RegisterFinishRequest,
+) -> (StatusCode, Json<serde_json::Value>) {
     let Some((user_id, reg_state)) = state
         .inner
         .security
@@ -171,6 +267,26 @@ async fn register_finish(
             Json(json!({ "error": format!("Registration verification failed: {}", e) })),
         ),
     }
+}
+
+fn local_bootstrap_enabled() -> bool {
+    std::env::var("SAO_LOCAL_BOOTSTRAP")
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn local_bootstrap_username() -> String {
+    std::env::var("SAO_LOCAL_ADMIN_USERNAME")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "local-admin".to_string())
 }
 
 #[derive(Deserialize)]
@@ -370,13 +486,7 @@ async fn login_finish(
             )
             .await;
 
-            authenticated_response(
-                &state,
-                &user,
-                access_token,
-                refresh_token,
-                StatusCode::OK,
-            )
+            authenticated_response(&state, &user, access_token, refresh_token, StatusCode::OK)
         }
         Err(e) => (
             StatusCode::UNAUTHORIZED,
@@ -386,10 +496,7 @@ async fn login_finish(
     }
 }
 
-async fn refresh_token(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
+async fn refresh_token(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
     let Some(refresh_token) = cookie_value(&headers, session::REFRESH_COOKIE_NAME) else {
         let mut response = (
             StatusCode::UNAUTHORIZED,
@@ -482,12 +589,7 @@ async fn refresh_token(
         &new_refresh,
     );
 
-    (
-        StatusCode::OK,
-        headers,
-        Json(json!({ "refreshed": true })),
-    )
-        .into_response()
+    (StatusCode::OK, headers, Json(json!({ "refreshed": true }))).into_response()
 }
 
 async fn logout(

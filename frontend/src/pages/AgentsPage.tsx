@@ -1,14 +1,26 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { listAgents, createAgent, deleteAgent } from '../api/agents';
-import type { Agent } from '../types';
+import {
+  listAgents,
+  createAgent,
+  deleteAgent,
+  downloadAgentBundle,
+} from '../api/agents';
+import { listLlmProviders } from '../api/llm-providers';
+import type { Agent, LlmProvider } from '../types';
 
 export default function AgentsPage() {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [showRegister, setShowRegister] = useState(false);
   const [newAgentName, setNewAgentName] = useState('');
+  const [newProvider, setNewProvider] = useState('');
+  const [newIdModel, setNewIdModel] = useState('');
+  const [newEgoModel, setNewEgoModel] = useState('');
   const [error, setError] = useState('');
   const [creating, setCreating] = useState(false);
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
@@ -17,38 +29,87 @@ export default function AgentsPage() {
     queryFn: listAgents,
   });
 
+  const { data: providers } = useQuery({
+    queryKey: ['llm-providers'],
+    queryFn: listLlmProviders,
+    // Non-admins can't read this; treat 403 as "no providers" gracefully.
+    retry: false,
+  });
+
+  const enabledProviders = useMemo<LlmProvider[]>(
+    () => (providers ?? []).filter((p) => p.enabled),
+    [providers],
+  );
+
+  const selectedProvider = useMemo(
+    () => enabledProviders.find((p) => p.provider === newProvider),
+    [enabledProviders, newProvider],
+  );
+
   const handleRegister = async () => {
     setError('');
     if (!newAgentName.trim()) {
       setError('Agent name is required');
       return;
     }
+    if (enabledProviders.length > 0) {
+      if (!newProvider) {
+        setError('Choose an LLM provider');
+        return;
+      }
+      if (!newIdModel.trim() || !newEgoModel.trim()) {
+        setError('Choose both Id and Ego models');
+        return;
+      }
+    }
 
     setCreating(true);
     try {
-      await createAgent(newAgentName.trim());
+      await createAgent({
+        name: newAgentName.trim(),
+        default_provider: newProvider || undefined,
+        default_id_model: newIdModel.trim() || undefined,
+        default_ego_model: newEgoModel.trim() || undefined,
+      });
       await queryClient.invalidateQueries({ queryKey: ['agents'] });
       setNewAgentName('');
+      setNewProvider('');
+      setNewIdModel('');
+      setNewEgoModel('');
       setShowRegister(false);
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : 'Failed to register agent',
-      );
+      setError(err instanceof Error ? err.message : 'Failed to register agent');
     } finally {
       setCreating(false);
     }
   };
 
+  const handleDownload = async (agent: Agent) => {
+    setError('');
+    setDownloadingId(agent.id);
+    try {
+      await downloadAgentBundle(agent.id, agent.name);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : 'Failed to download bundle',
+      );
+    } finally {
+      setDownloadingId(null);
+    }
+  };
+
   const handleDelete = async (id: string) => {
+    setError('');
     setDeletingId(id);
     try {
       await deleteAgent(id);
+      queryClient.setQueryData<Agent[]>(['agents'], (current) =>
+        current?.filter((agent) => agent.id !== id) ?? [],
+      );
       await queryClient.invalidateQueries({ queryKey: ['agents'] });
       setConfirmDeleteId(null);
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : 'Failed to delete agent',
-      );
+      setError(err instanceof Error ? err.message : 'Failed to delete agent');
     } finally {
       setDeletingId(null);
     }
@@ -81,21 +142,89 @@ export default function AgentsPage() {
         </button>
       </div>
 
-      {/* Register Agent Form */}
+      {error && (
+        <div className="mb-6 rounded-lg border border-red-800 bg-red-900/30 p-3">
+          <p className="text-sm text-red-300">{error}</p>
+        </div>
+      )}
+
       {showRegister && (
-        <div className="bg-gray-800 rounded-xl border border-gray-700 p-6 mb-6">
-          <h2 className="text-lg font-semibold text-white mb-4">
+        <div className="bg-gray-800 rounded-xl border border-gray-700 p-6 mb-6 space-y-4">
+          <h2 className="text-lg font-semibold text-white">
             Register New Agent
           </h2>
-          <div className="flex gap-3">
+
+          <div>
+            <label className="block text-xs text-gray-400 mb-1">Name</label>
             <input
               type="text"
               value={newAgentName}
               onChange={(e) => setNewAgentName(e.target.value)}
-              placeholder="Agent name (e.g., abigail-main)"
-              onKeyDown={(e) => e.key === 'Enter' && handleRegister()}
-              className="flex-1 px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
+              placeholder="abigail-main"
+              className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
             />
+          </div>
+
+          {enabledProviders.length === 0 ? (
+            <div className="rounded-lg border border-yellow-800 bg-yellow-900/20 p-3 text-sm text-yellow-200">
+              No LLM providers are enabled. Ask an administrator to configure one
+              under <span className="font-mono">/admin/llm-providers</span>.
+            </div>
+          ) : (
+            <>
+              <div>
+                <label className="block text-xs text-gray-400 mb-1">
+                  LLM Provider
+                </label>
+                <select
+                  value={newProvider}
+                  onChange={(e) => {
+                    setNewProvider(e.target.value);
+                    const p = enabledProviders.find(
+                      (x) => x.provider === e.target.value,
+                    );
+                    if (p?.default_model) {
+                      setNewIdModel(p.default_model);
+                      setNewEgoModel(p.default_model);
+                    }
+                  }}
+                  className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                >
+                  <option value="">Choose provider...</option>
+                  {enabledProviders.map((p) => (
+                    <option key={p.provider} value={p.provider}>
+                      {p.provider}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1">
+                    Id model
+                  </label>
+                  <ModelInput
+                    value={newIdModel}
+                    onChange={setNewIdModel}
+                    options={selectedProvider?.approved_models ?? []}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1">
+                    Ego model
+                  </label>
+                  <ModelInput
+                    value={newEgoModel}
+                    onChange={setNewEgoModel}
+                    options={selectedProvider?.approved_models ?? []}
+                  />
+                </div>
+              </div>
+            </>
+          )}
+
+          <div className="flex gap-3">
             <button
               onClick={handleRegister}
               disabled={creating}
@@ -107,6 +236,9 @@ export default function AgentsPage() {
               onClick={() => {
                 setShowRegister(false);
                 setNewAgentName('');
+                setNewProvider('');
+                setNewIdModel('');
+                setNewEgoModel('');
                 setError('');
               }}
               className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 font-medium rounded-lg transition-colors"
@@ -114,11 +246,9 @@ export default function AgentsPage() {
               Cancel
             </button>
           </div>
-          {error && <p className="text-red-400 text-sm mt-2">{error}</p>}
         </div>
       )}
 
-      {/* Agent List */}
       {isLoading ? (
         <div className="text-center py-16 text-gray-400">
           Loading agents...
@@ -147,6 +277,16 @@ export default function AgentsPage() {
                 </div>
               </div>
 
+              {agent.default_provider && (
+                <div className="mb-3 text-xs text-gray-300">
+                  <span className="text-gray-500">LLM:</span>{' '}
+                  <span className="font-mono">
+                    {agent.default_provider} / {agent.default_id_model} /{' '}
+                    {agent.default_ego_model}
+                  </span>
+                </div>
+              )}
+
               {agent.capabilities.length > 0 && (
                 <div className="flex flex-wrap gap-1.5 mb-3">
                   {agent.capabilities.map((cap) => (
@@ -160,43 +300,54 @@ export default function AgentsPage() {
                 </div>
               )}
 
-              {agent.public_key && (
-                <div className="mb-3">
-                  <p className="text-xs text-gray-500">Public Key</p>
-                  <p className="text-xs text-gray-400 font-mono truncate">
-                    {agent.public_key}
-                  </p>
-                </div>
-              )}
-
-              <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-700">
-                <span className="text-xs text-gray-500">
-                  Created {new Date(agent.created_at).toLocaleDateString()}
-                </span>
+              <div className="flex flex-wrap gap-2 mt-3 pt-3 border-t border-gray-700">
+                <button
+                  onClick={() => handleDownload(agent)}
+                  disabled={downloadingId === agent.id}
+                  className="text-xs px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-900 text-white rounded transition-colors"
+                >
+                  {downloadingId === agent.id ? 'Building...' : 'Download bundle'}
+                </button>
+                <button
+                  onClick={() => navigate(`/agents/${agent.id}/events`)}
+                  className="text-xs px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded transition-colors"
+                >
+                  Logs
+                </button>
                 {confirmDeleteId === agent.id ? (
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 ml-auto">
                     <button
                       onClick={() => handleDelete(agent.id)}
                       disabled={deletingId === agent.id}
-                      className="text-xs px-2 py-1 bg-red-600 hover:bg-red-700 text-white rounded transition-colors"
+                      className="text-xs px-3 py-1.5 bg-red-600 hover:bg-red-700 disabled:bg-red-900 text-white rounded transition-colors"
                     >
-                      {deletingId === agent.id ? '...' : 'Confirm'}
+                      {deletingId === agent.id
+                        ? 'Deleting...'
+                        : 'Confirm delete'}
                     </button>
                     <button
                       onClick={() => setConfirmDeleteId(null)}
-                      className="text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded transition-colors"
+                      disabled={deletingId === agent.id}
+                      className="text-xs px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded transition-colors"
                     >
                       Cancel
                     </button>
                   </div>
                 ) : (
                   <button
-                    onClick={() => setConfirmDeleteId(agent.id)}
-                    className="text-xs text-red-400 hover:text-red-300 transition-colors"
+                    onClick={() => {
+                      setError('');
+                      setConfirmDeleteId(agent.id);
+                    }}
+                    className="text-xs px-3 py-1.5 text-red-400 hover:text-red-300 ml-auto"
                   >
                     Delete
                   </button>
                 )}
+              </div>
+
+              <div className="text-xs text-gray-500 mt-2">
+                Created {new Date(agent.created_at).toLocaleDateString()}
               </div>
             </div>
           ))}
@@ -213,5 +364,36 @@ export default function AgentsPage() {
         </div>
       )}
     </div>
+  );
+}
+
+function ModelInput({
+  value,
+  onChange,
+  options,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: string[];
+}) {
+  const listId = `models-${Math.random().toString(36).slice(2, 9)}`;
+  return (
+    <>
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        list={options.length > 0 ? listId : undefined}
+        placeholder="model name"
+        className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
+      />
+      {options.length > 0 && (
+        <datalist id={listId}>
+          {options.map((m) => (
+            <option key={m} value={m} />
+          ))}
+        </datalist>
+      )}
+    </>
   );
 }

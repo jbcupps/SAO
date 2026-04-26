@@ -12,6 +12,12 @@ docker run --rm -it \
   ghcr.io/jbcupps/sao-installer:latest
 ```
 
+Windows PowerShell:
+
+```powershell
+docker run --rm -it -e ANTHROPIC_API_KEY="sk-ant-your-key-here" ghcr.io/jbcupps/sao-installer:latest
+```
+
 In one guided session the installer signs you into Azure, validates permissions, provisions the SAO control plane, and prints the live URL when the platform is ready.
 
 The default Azure deployment now hardens the runtime by:
@@ -153,15 +159,76 @@ Write-Host "SAO baseline Entra ID security groups are ready."
 - Deployment contract and operator workflow: [docs/SAO_INSTALLER_SPEC.md](docs/SAO_INSTALLER_SPEC.md)
 - Vault, registry, and governed skill surfaces: [docs/VAULT_AND_REGISTRY.md](docs/VAULT_AND_REGISTRY.md)
 - Skills as governed artifacts: [docs/agent_archetype.md](docs/agent_archetype.md)
+- OrionII entity contract (LLM proxy, entity JWT, bundle download): [docs/orion-sao-mvp.md](docs/orion-sao-mvp.md)
 - Detailed architecture source: [documents/SAO_Orion_Architecture_Analysis_v2.docx](documents/SAO_Orion_Architecture_Analysis_v2.docx)
+
+## Entity Lifecycle (OrionII)
+
+SAO is the issuer of OrionII entities. The full flow is in
+[docs/runbooks/local-orion-sao-mvp.md](docs/runbooks/local-orion-sao-mvp.md). At a glance:
+
+1. Admin signs in, opens **/admin/llm-providers**, and per-provider:
+   - OpenAI / Anthropic / xAI Grok / Google Gemini — paste the API key, tick approved models,
+     set a default, click **Test connection** to confirm with a real ping.
+   - Ollama — set the base URL, click **Refresh models** to pull the live list, tick allowed
+     ones.
+
+   Keys are stored encrypted in the vault; admins never see the key after save. **Every entity
+   call goes through `POST /api/llm/generate` on SAO**, so keys never leave the server, every
+   prompt is auditable, and key rotation/revocation is instant.
+2. User signs in, opens **/agents**, registers a new entity (name + provider + Id/Ego model).
+3. User clicks **Download bundle**. SAO mints a fresh OIDC-shaped entity JWT (revoking any
+   prior tokens for that agent), packages a ZIP with `config.json` + `OrionII-Setup.msi`.
+4. User installs OrionII, drops `config.json` into `%APPDATA%\OrionII\`, launches the app.
+5. OrionII adopts the SAO-assigned identity, calls `POST /api/llm/generate` for every Id/Ego
+   prompt — keys never leave SAO. Per-agent egress events stream into **/agents/:id/events**.
+
+Deleting an agent in SAO bulk-revokes its tokens.
 
 ## Development & Contributing
 
-For local development, the Azure installer is still the primary story, but the repo includes a local Compose workflow for integration work:
+For local development, the Azure installer is still the production story, but the repo includes a local Compose workflow for integration work:
 
 ```bash
 POSTGRES_PASSWORD=local-dev-only-change-me docker compose -f docker/docker-compose.yml up --build
 ```
+
+Windows PowerShell:
+
+```powershell
+$env:POSTGRES_PASSWORD = "local-dev-only-change-me"
+$env:SAO_JWT_SECRET = "local-dev-only-change-me"
+docker compose -f docker\docker-compose.yml up --build
+```
+
+After Compose starts, use the local development bootstrap command from `docs/runbooks/local-orion-sao-mvp.md` to initialize the local vault and admin user without enabling a browser setup wizard.
+
+To validate the local SAO side of the OrionII integration:
+
+```powershell
+# Minimum: health, bootstrap, dev token, policy pull, egress ack.
+.\scripts\local-mvp-smoke.ps1 -StartCompose
+
+# Full bundle round-trip: also configures Ollama, creates an agent, downloads the bundle.
+.\scripts\local-mvp-smoke.ps1 -StartCompose -OllamaBaseUrl "http://host.docker.internal:11434" -OllamaModel "llama3.2"
+```
+
+To serve real OrionII installers from `/api/agents/:id/bundle`, build the MSI in OrionII first and
+point Compose at it via two host env vars before running `up`:
+
+```powershell
+# In OrionII:
+npm run tauri build -- --bundles msi
+
+# In SAO (host shell):
+$env:SAO_ORION_INSTALLER_DIR      = "C:\Repo\OrionII\src-tauri\target\release\bundle\msi"
+$env:SAO_ORION_INSTALLER_FILENAME = "OrionII_0.1.0_x64_en-US.msi"
+$env:SAO_PUBLIC_BASE_URL          = "http://localhost:3100"
+docker compose -f docker\docker-compose.yml up --build
+```
+
+The Compose file mounts `SAO_ORION_INSTALLER_DIR` read-only at `/installer` inside the container
+and exposes the file via `SAO_ORION_INSTALLER_PATH=/installer/<filename>`.
 
 Useful validation commands:
 

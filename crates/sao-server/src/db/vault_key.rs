@@ -28,3 +28,27 @@ pub async fn get_vmk(pool: &PgPool) -> Result<Option<VaultMasterKeyRow>, sqlx::E
     .fetch_optional(pool)
     .await
 }
+
+/// Store the initial sealed VMK envelope.
+pub async fn insert_vmk(
+    pool: &PgPool,
+    encrypted_key: &[u8],
+    kdf_salt: &[u8],
+    kdf_memory_cost: i32,
+    kdf_time_cost: i32,
+    kdf_parallelism: i32,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO vault_master_key \
+         (encrypted_key, kdf_salt, kdf_memory_cost, kdf_time_cost, kdf_parallelism) \
+         VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(encrypted_key)
+    .bind(kdf_salt)
+    .bind(kdf_memory_cost)
+    .bind(kdf_time_cost)
+    .bind(kdf_parallelism)
+    .execute(pool)
+    .await?;
+    Ok(())
+}

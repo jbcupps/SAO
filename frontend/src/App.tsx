@@ -14,6 +14,8 @@ import AdminSsoPage from './pages/AdminSsoPage';
 import AuditLogPage from './pages/AuditLogPage';
 import SkillsCatalogPage from './pages/SkillsCatalogPage';
 import AdminSkillReviewPage from './pages/AdminSkillReviewPage';
+import AdminLlmProvidersPage from './pages/AdminLlmProvidersPage';
+import AgentEventsPage from './pages/AgentEventsPage';
 
 function AppRoutes() {
   const { isAuthenticated, isLoading: authLoading } = useAuth();
@@ -61,6 +63,7 @@ function AppRoutes() {
         <Route path="/" element={<Dashboard />} />
         <Route path="/vault" element={<VaultPage />} />
         <Route path="/agents" element={<AgentsPage />} />
+        <Route path="/agents/:id/events" element={<AgentEventsPage />} />
         <Route path="/skills" element={<SkillsCatalogPage />} />
         <Route path="/audit" element={<AuditLogPage />} />
         <Route
@@ -84,6 +87,14 @@ function AppRoutes() {
           element={
             <ProtectedRoute admin>
               <AdminSkillReviewPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/admin/llm-providers"
+          element={
+            <ProtectedRoute admin>
+              <AdminLlmProvidersPage />
             </ProtectedRoute>
           }
         />

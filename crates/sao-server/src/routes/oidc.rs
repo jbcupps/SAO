@@ -17,7 +17,7 @@ const ENV_PROVIDER_ID: &str = "entra";
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/auth/oidc/providers", get(list_providers))
-        .route("/api/auth/oidc/{provider_id}/authorize", get(authorize))
+        .route("/api/auth/oidc/:provider_id/authorize", get(authorize))
         .route("/api/auth/oidc/callback", get(callback))
 }
 
@@ -250,7 +250,9 @@ async fn resolve_provider(
         } else {
             return Err((
                 StatusCode::SERVICE_UNAVAILABLE,
-                Json(json!({ "error": "Vault must be unsealed to use database-backed OIDC providers" })),
+                Json(
+                    json!({ "error": "Vault must be unsealed to use database-backed OIDC providers" }),
+                ),
             ));
         }
     } else {
@@ -310,8 +312,8 @@ async fn load_or_create_user(
         if let Ok(provider_id) = uuid::Uuid::parse_str(&provider.key) {
             if let Some(uid) =
                 crate::db::oidc::find_user_by_oidc(&state.inner.db, provider_id, &user_info.subject)
-                .await
-                .map_err(|e| e.to_string())?
+                    .await
+                    .map_err(|e| e.to_string())?
             {
                 if bootstrap_admin {
                     crate::db::users::update_user_role(&state.inner.db, uid, "admin")

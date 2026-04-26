@@ -4,6 +4,10 @@ import type {
   SetupStatus,
   User,
 } from '../types';
+import type {
+  PublicKeyCredentialCreationOptionsJSON,
+  PublicKeyCredentialRequestOptionsJSON,
+} from '@simplewebauthn/types';
 
 export async function setupStatus(): Promise<SetupStatus> {
   return apiRequest<SetupStatus>('/api/setup/status');
@@ -11,10 +15,10 @@ export async function setupStatus(): Promise<SetupStatus> {
 
 export async function webauthnRegisterStart(
   username: string,
-): Promise<{ challenge_id: string; options: PublicKeyCredentialCreationOptions }> {
+): Promise<{ challenge_id: string; options: PublicKeyCredentialCreationOptionsJSON | { publicKey: PublicKeyCredentialCreationOptionsJSON } }> {
   const res = await apiRequest<{
     challenge_id: string;
-    challenge: PublicKeyCredentialCreationOptions;
+    challenge: PublicKeyCredentialCreationOptionsJSON | { publicKey: PublicKeyCredentialCreationOptionsJSON };
   }>('/api/auth/webauthn/register/start', {
     method: 'POST',
     body: JSON.stringify({ username }),
@@ -35,12 +39,38 @@ export async function webauthnRegisterFinish(
   );
 }
 
-export async function webauthnLoginStart(
+export async function localWebauthnRegisterStart(
   username?: string,
-): Promise<{ challenge_id: string; options: PublicKeyCredentialRequestOptions }> {
+): Promise<{ challenge_id: string; options: PublicKeyCredentialCreationOptionsJSON | { publicKey: PublicKeyCredentialCreationOptionsJSON } }> {
   const res = await apiRequest<{
     challenge_id: string;
-    challenge: PublicKeyCredentialRequestOptions;
+    challenge: PublicKeyCredentialCreationOptionsJSON | { publicKey: PublicKeyCredentialCreationOptionsJSON };
+  }>('/api/auth/webauthn/local/register/start', {
+    method: 'POST',
+    body: JSON.stringify({ username }),
+  });
+  return { challenge_id: res.challenge_id, options: res.challenge };
+}
+
+export async function localWebauthnRegisterFinish(
+  challenge_id: string,
+  credential: unknown,
+): Promise<{ status: string; credential_id: string }> {
+  return apiRequest<{ status: string; credential_id: string }>(
+    '/api/auth/webauthn/local/register/finish',
+    {
+      method: 'POST',
+      body: JSON.stringify({ challenge_id, credential }),
+    },
+  );
+}
+
+export async function webauthnLoginStart(
+  username?: string,
+): Promise<{ challenge_id: string; options: PublicKeyCredentialRequestOptionsJSON | { publicKey: PublicKeyCredentialRequestOptionsJSON } }> {
+  const res = await apiRequest<{
+    challenge_id: string;
+    challenge: PublicKeyCredentialRequestOptionsJSON | { publicKey: PublicKeyCredentialRequestOptionsJSON };
   }>('/api/auth/webauthn/login/start', {
     method: 'POST',
     body: JSON.stringify({ username }),

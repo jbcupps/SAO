@@ -4,10 +4,26 @@ The fastest path to a live SAO environment is the standalone installer container
 
 ## One Command
 
+Bash:
+
 ```bash
 docker run --rm -it \
   -e ANTHROPIC_API_KEY=sk-ant-your-key-here \
   ghcr.io/jbcupps/sao-installer:latest
+```
+
+Windows PowerShell:
+
+```powershell
+docker run --rm -it -e ANTHROPIC_API_KEY="sk-ant-your-key-here" ghcr.io/jbcupps/sao-installer:latest
+```
+
+Build the local installer image first when testing repository changes:
+
+```powershell
+cd C:\Repo\SAO
+docker build -f installer/Dockerfile -t sao-installer installer
+docker run --rm -it -e ANTHROPIC_API_KEY="sk-ant-your-key-here" sao-installer
 ```
 
 ## What The Installer Does

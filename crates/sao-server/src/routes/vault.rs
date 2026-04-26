@@ -18,9 +18,9 @@ pub fn routes() -> Router<AppState> {
         .route("/api/vault/seal", post(seal_vault))
         .route("/api/vault/secrets", get(list_secrets))
         .route("/api/vault/secrets", post(create_secret))
-        .route("/api/vault/secrets/{id}", get(get_secret))
-        .route("/api/vault/secrets/{id}", put(update_secret))
-        .route("/api/vault/secrets/{id}", delete(delete_secret))
+        .route("/api/vault/secrets/:id", get(get_secret))
+        .route("/api/vault/secrets/:id", put(update_secret))
+        .route("/api/vault/secrets/:id", delete(delete_secret))
 }
 
 async fn vault_status(State(state): State<AppState>) -> Json<Value> {

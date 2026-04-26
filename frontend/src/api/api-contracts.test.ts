@@ -5,7 +5,8 @@ import {
   queryAuditLog,
 } from './admin';
 import { listSecrets } from './vault';
-import { webauthnLoginStart } from './auth';
+import { getMe, webauthnLoginStart } from './auth';
+import { deleteAgent } from './agents';
 
 type MockResponse = {
   ok: boolean;
@@ -141,6 +142,36 @@ describe('frontend api contract adapters', () => {
       expect.objectContaining({
         headers: expect.any(Object),
         credentials: 'include',
+      }),
+    );
+  });
+
+  it('does not refresh or hard reload when auth discovery is unauthenticated', async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse({ error: 'Authentication required' }, 401));
+
+    await expect(getMe()).rejects.toThrow('API error 401');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/auth/me',
+      expect.objectContaining({
+        credentials: 'include',
+      }),
+    );
+  });
+
+  it('sends agent delete requests to the browser-safe action endpoint', async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse({ deleted: true }));
+
+    await deleteAgent('agent-1');
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/agents/agent-1/delete',
+      expect.objectContaining({
+        method: 'POST',
+        credentials: 'include',
+        headers: expect.objectContaining({
+          'X-CSRF-Token': 'test-csrf-token',
+        }),
       }),
     );
   });

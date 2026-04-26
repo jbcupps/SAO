@@ -3,6 +3,7 @@ const CSRF_COOKIE_NAME = 'sao_csrf';
 
 let isRefreshing = false;
 let refreshSubscribers: Array<() => void> = [];
+const NO_REFRESH_PATHS = new Set(['/api/auth/me', '/api/auth/refresh']);
 
 function onRefreshed() {
   refreshSubscribers.forEach((cb) => cb());
@@ -73,7 +74,7 @@ export async function apiRequest<T>(
     headers,
   });
 
-  if (res.status === 401 && path !== '/api/auth/refresh') {
+  if (res.status === 401 && !NO_REFRESH_PATHS.has(path)) {
     if (!isRefreshing) {
       isRefreshing = true;
       const refreshed = await attemptSessionRefresh();
