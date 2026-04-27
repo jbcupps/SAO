@@ -70,8 +70,8 @@ pub async fn dispatch(
         return Err(LlmError::ProviderDisabled(req.provider.clone()));
     }
 
-    let approved: Vec<String> = serde_json::from_value(settings.approved_models.clone())
-        .unwrap_or_default();
+    let approved: Vec<String> =
+        serde_json::from_value(settings.approved_models.clone()).unwrap_or_default();
     if !approved.is_empty() && !approved.iter().any(|m| m == &req.model) {
         return Err(LlmError::ModelNotApproved {
             provider: req.provider.clone(),

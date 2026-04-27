@@ -31,7 +31,10 @@ pub fn routes() -> Router<AppState> {
         .route("/api/admin/audit", get(query_audit_log))
         // LLM provider configuration (admin only)
         .route("/api/admin/llm-providers", get(list_llm_providers))
-        .route("/api/admin/llm-providers/:provider", put(update_llm_provider))
+        .route(
+            "/api/admin/llm-providers/:provider",
+            put(update_llm_provider),
+        )
         .route(
             "/api/admin/llm-providers/ollama/probe",
             post(probe_ollama_models),
@@ -42,7 +45,10 @@ pub fn routes() -> Router<AppState> {
         )
         // OrionII installer source registry (admin only)
         .route("/api/admin/installer-sources", get(list_installer_sources))
-        .route("/api/admin/installer-sources", post(create_installer_source))
+        .route(
+            "/api/admin/installer-sources",
+            post(create_installer_source),
+        )
         .route(
             "/api/admin/installer-sources/probe",
             post(probe_installer_source),
@@ -57,8 +63,7 @@ pub fn routes() -> Router<AppState> {
         )
 }
 
-const SUPPORTED_PROVIDERS: &[&str] =
-    &["openai", "anthropic", "ollama", "grok", "gemini"];
+const SUPPORTED_PROVIDERS: &[&str] = &["openai", "anthropic", "ollama", "grok", "gemini"];
 const KEY_BEARING_PROVIDERS: &[&str] = &["openai", "anthropic", "grok", "gemini"];
 
 // --- User management ---
@@ -499,7 +504,9 @@ async fn update_llm_provider(
         );
     }
 
-    if provider == "ollama" && req.enabled && req.base_url.as_deref().unwrap_or("").trim().is_empty()
+    if provider == "ollama"
+        && req.enabled
+        && req.base_url.as_deref().unwrap_or("").trim().is_empty()
     {
         return (
             StatusCode::BAD_REQUEST,
@@ -558,10 +565,7 @@ async fn update_llm_provider(
         }
     }
 
-    let approved_models = req
-        .approved_models
-        .clone()
-        .unwrap_or_else(|| json!([]));
+    let approved_models = req.approved_models.clone().unwrap_or_else(|| json!([]));
 
     let saved = match crate::db::llm_providers::upsert(
         &state.inner.db,
@@ -692,10 +696,7 @@ async fn test_llm_provider(
         provider: provider.clone(),
         model: model.clone(),
         system: "You are a connectivity test for SAO. Reply briefly.".to_string(),
-        prompt: req
-            .prompt
-            .clone()
-            .unwrap_or_else(|| "ping".to_string()),
+        prompt: req.prompt.clone().unwrap_or_else(|| "ping".to_string()),
         temperature: 0.0,
         role: "test".to_string(),
     };
@@ -713,7 +714,9 @@ async fn test_llm_provider(
         },
         "anthropic" => match crate::llm::keys::get_api_key(&state, "anthropic").await {
             Ok(Some(key)) => crate::llm::anthropic::generate(&key, &test_req).await,
-            Ok(None) => Err(crate::llm::LlmError::ProviderUnconfigured("anthropic".into())),
+            Ok(None) => Err(crate::llm::LlmError::ProviderUnconfigured(
+                "anthropic".into(),
+            )),
             Err(e) => Err(e),
         },
         "grok" => match crate::llm::keys::get_api_key(&state, "grok").await {

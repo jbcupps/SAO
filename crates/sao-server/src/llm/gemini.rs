@@ -102,12 +102,19 @@ pub async fn generate(api_key: &str, req: &GenerateRequest) -> Result<String, Ll
     let parsed: GenerateContentResponse =
         serde_json::from_str(&text).map_err(|e| LlmError::BadResponse(e.to_string()))?;
 
-    if parsed.candidates.as_ref().map(|c| c.is_empty()).unwrap_or(true) {
+    if parsed
+        .candidates
+        .as_ref()
+        .map(|c| c.is_empty())
+        .unwrap_or(true)
+    {
         let reason = parsed
             .prompt_feedback
             .map(|v| v.to_string())
             .unwrap_or_else(|| "no candidates".to_string());
-        return Err(LlmError::BadResponse(format!("Gemini returned no candidates: {reason}")));
+        return Err(LlmError::BadResponse(format!(
+            "Gemini returned no candidates: {reason}"
+        )));
     }
 
     parsed

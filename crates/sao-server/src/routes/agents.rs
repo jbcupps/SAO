@@ -174,8 +174,7 @@ async fn create_agent(
     )
     .await;
     crate::db::audit::log_birth_event(&identity_agent_id);
-    let ethic_preview =
-        sao_core::ethical_bridge::get_triangleethic_preview(&identity_agent_id);
+    let ethic_preview = sao_core::ethical_bridge::get_triangleethic_preview(&identity_agent_id);
     (
         StatusCode::CREATED,
         Json(json!({

@@ -33,6 +33,7 @@ external_pubkey.bin
 *.db
 *.db-wal
 *.db-shm
+docker/empty-installer-mount/*.msi
 
 # IDE
 .idea/

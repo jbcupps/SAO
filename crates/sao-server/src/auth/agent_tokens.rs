@@ -88,7 +88,8 @@ pub async fn mint_entity_token(
     let now = Utc::now();
     let expires_at = now + Duration::days(DEFAULT_TTL_DAYS);
 
-    let row = db::insert_token(pool, agent_id, issuer_user, Some(expires_at), DEFAULT_SCOPE).await?;
+    let row =
+        db::insert_token(pool, agent_id, issuer_user, Some(expires_at), DEFAULT_SCOPE).await?;
 
     let claims = AgentClaims {
         iss: ISSUER.to_string(),
@@ -140,7 +141,9 @@ pub async fn validate_entity_token(
         .ok_or(AgentTokenError::Invalid("token revoked or unknown"))?;
 
     if row.agent_id.to_string() != claims.sub {
-        return Err(AgentTokenError::Invalid("sub does not match revocation row"));
+        return Err(AgentTokenError::Invalid(
+            "sub does not match revocation row",
+        ));
     }
 
     let _ = db::touch_last_used(pool, jti).await;
@@ -185,9 +188,8 @@ mod tests {
         let mut validation = Validation::default();
         validation.set_audience(&[AUDIENCE]);
         validation.set_issuer(&[ISSUER]);
-        let decoded =
-            decode::<AgentClaims>(&jwt, &DecodingKey::from_secret(&secret), &validation)
-                .expect("decode");
+        let decoded = decode::<AgentClaims>(&jwt, &DecodingKey::from_secret(&secret), &validation)
+            .expect("decode");
 
         assert_eq!(decoded.claims.entity_name, "abigail");
         assert_eq!(decoded.claims.principal_type, PRINCIPAL_TYPE_NON_HUMAN);
@@ -224,9 +226,8 @@ mod tests {
         let mut validation = Validation::default();
         validation.set_audience(&[AUDIENCE]);
         validation.set_issuer(&[ISSUER]);
-        let decoded =
-            decode::<AgentClaims>(&jwt, &DecodingKey::from_secret(&secret), &validation)
-                .expect("decode");
+        let decoded = decode::<AgentClaims>(&jwt, &DecodingKey::from_secret(&secret), &validation)
+            .expect("decode");
         assert_ne!(decoded.claims.principal_type, PRINCIPAL_TYPE_NON_HUMAN);
     }
 }

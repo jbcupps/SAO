@@ -97,10 +97,42 @@ fn orion_routes_define_machine_policy_and_egress_contract() {
 }
 
 #[test]
+fn bundle_birth_and_llm_routes_define_entity_contracts() {
+    let bundle_src = include_str!("../src/routes/bundle.rs");
+    let orion_src = include_str!("../src/routes/orion.rs");
+    let llm_src = include_str!("../src/routes/llm.rs");
+
+    assert!(bundle_src.contains("/api/agents/:id/bundle"));
+    assert!(bundle_src.contains("\"sao_base_url\""));
+    assert!(bundle_src.contains("\"agent_token\""));
+    assert!(bundle_src.contains("\"bus_transport\""));
+    assert!(bundle_src.contains("\"nats_jetstream\""));
+    assert!(bundle_src.contains("deployment.json"));
+    assert!(bundle_src.contains("orionii.sao.deployment"));
+    assert!(bundle_src.contains("\"downloaded_from\""));
+    assert!(bundle_src.contains("Install-OrionII.cmd"));
+    assert!(bundle_src.contains("Install-OrionII.ps1"));
+    assert!(bundle_src.contains("public_base_url(&headers)"));
+    assert!(bundle_src.contains("x-forwarded-host"));
+    assert!(bundle_src.contains("GET /api/orion/birth"));
+    assert!(bundle_src.contains("SAO does not participate in OrionII's internal bus"));
+
+    assert!(orion_src.contains("/api/orion/birth"));
+    assert!(orion_src.contains("OrionBirthResponse"));
+    assert!(orion_src.contains("\"llm:generate\""));
+
+    assert!(llm_src.contains("/api/llm/generate"));
+    assert!(llm_src.contains("EntityCaller"));
+    assert!(llm_src.contains("validate_entity_token"));
+}
+
+#[test]
 fn security_keeps_orion_csrf_exception_scoped() {
     let src = include_str!("../src/security.rs");
     assert!(src.contains("is_orion_machine_request"));
     assert!(src.contains("\"/api/orion/egress\""));
+    assert!(src.contains("\"/api/orion/birth\""));
+    assert!(src.contains("\"/api/llm/generate\""));
     assert!(src.contains("requires_csrf(&method)"));
     assert!(src.contains("Bearer "));
 }

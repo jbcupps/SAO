@@ -3,12 +3,16 @@
 This document is the shared local MVP contract for wiring `C:\Repo\OrionII` to `C:\Repo\SAO`.
 SAO owns the control plane: identity, secrets, agent lifecycle, LLM key custody, and audit. OrionII
 owns the durable local desktop runtime: identity continuity, document indexing, and egress to SAO.
+This HTTP contract is the stable seam regardless of OrionII internals; swaps between in-process
+topics or durable-broker transport inside OrionII must preserve the paths, auth shape, and payloads
+described here. SAO does not participate in OrionII's entity-internal bus.
 
 ## MVP Scope
 
 - A signed-in SAO admin configures LLM provider keys (OpenAI / Anthropic / Ollama) once.
 - A signed-in SAO user creates an OrionII entity with a chosen provider + model.
-- The user downloads a bundle (`config.json` + `OrionII-Setup.msi`) from SAO.
+- The user downloads a one-click bundle (`config.json` + `deployment.json` +
+  `OrionII-Setup.msi` + install launcher) from SAO.
 - The downloaded entity adopts the SAO-assigned identity, phones home for policy, ships egress
   events, and routes all model calls through SAO's LLM proxy.
 - Browser setup remains installer-led; production bootstrap is the Azure conversational installer.
@@ -115,10 +119,32 @@ Errors:
 Mints a fresh entity JWT, revokes prior tokens for the same agent, packages a ZIP:
 
 ```
-config.json            -- sao_base_url, agent_id, agent_token (JWT), default models, client_version_min
+config.json            -- sao_base_url, agent_id, agent_token (JWT), bus_transport, defaults
+deployment.json        -- non-secret manifest: downloaded_from, installer file, HTTP seam, bus intent
 OrionII-Setup.msi      -- Tauri installer (read from SAO_ORION_INSTALLER_PATH inside the container)
+Install-OrionII.cmd    -- double-click Windows launcher that installs and writes config.json
+Install-OrionII.ps1    -- helper used by the launcher
 README-FIRST-RUN.txt   -- install steps
 ```
+
+The bundle's `config.json` requests OrionII's durable local bus transport while keeping SAO
+outside the bus:
+
+```json
+{
+  "sao_base_url": "http://localhost:3100",
+  "agent_id": "...",
+  "agent_token": "...",
+  "client_version_min": "0.1.0",
+  "bus_transport": { "kind": "nats_jetstream", "port": 4222 }
+}
+```
+
+`sao_base_url` is derived from the request host / forwarded host that served the bundle, falling
+back to `SAO_PUBLIC_BASE_URL` only when the request does not carry host information. This keeps
+downloads from a local container, LAN host, or reverse proxy pointed back at the same SAO origin
+without asking the user to edit JSON. `deployment.json.downloaded_from` records the same origin
+for support/debugging without duplicating the entity bearer token.
 
 Returns 503 if the installer is not staged with a clear remediation message.
 

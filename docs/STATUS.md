@@ -1,6 +1,6 @@
 # SAO ↔ OrionII — Project Status
 
-_Last updated: 2026-04-26_
+_Last updated: 2026-04-27_
 
 ## Where we are
 
@@ -44,8 +44,9 @@ Docker Compose stack with a real Anthropic upstream:
 
 ### User surface (`/agents`, `/agents/:id/events`)
 - Agent registration wizard: name + provider + Id model + Ego model.
-- Per-card **Download bundle** (mints fresh JWT, packages cached MSI + config.json + README)
-  and **Logs** (per-agent live egress feed, polls every 5s).
+- Per-card **Download bundle** (mints fresh JWT, packages cached MSI + config/deployment
+  manifests + one-click launcher + README) and **Logs** (per-agent live egress feed, polls every
+  5s).
 - Live `last_heartbeat` derived from the latest egress event.
 
 ### Runtime config — dynamic via birth event
@@ -54,8 +55,12 @@ Docker Compose stack with a real Anthropic upstream:
 - OrionII calls birth on every launch; the response overrides bundle defaults so admin
   changes (provider switch, model swap, policy update) take effect on the next OrionII boot
   with no re-bundling.
-- Bundle `config.json` is now an anchor (`sao_base_url` + `agent_token`); fallback fields
-  remain for offline mode.
+- Bundle `config.json` is now an anchor (`sao_base_url` + `agent_token`) plus OrionII-local
+  `bus_transport: { kind: "nats_jetstream", port: 4222 }`; fallback model fields remain for
+  offline mode. SAO derives `sao_base_url` from the bundle download host when possible, so users
+  do not edit JSON. The ZIP also includes `deployment.json` as a non-secret manifest of the
+  downloaded SAO origin, installer launcher, HTTP seam, and bus intent. SAO stays outside
+  OrionII's internal bus.
 
 ### OrionII desktop
 - Tauri 2 + React 19 shell. Boots in under a second.
@@ -64,8 +69,12 @@ Docker Compose stack with a real Anthropic upstream:
 - **In-app paste-config UI** — yellow "Enroll with SAO" panel visible until birth succeeds;
   pastes the JSON, validates, writes it to `%APPDATA%\OrionII\config.json`, hot-swaps the
   running OrionCore. No restart.
+- **One-click bundle install path** — downloaded bundles include `Install-OrionII.cmd`, which
+  writes `config.json`, runs the MSI, and starts OrionII for non-technical users.
 - Identity continuity preserved across reinstalls (durable JSON state file).
 - Egress payloads stamp `clientVersion` for fleet observability.
+- Chat egress now aligns with the OrionII topic design: `ego.action` produces a sanitized
+  `egress.outbound` audit event that SAO receives only through `POST /api/orion/egress`.
 
 ### Operational ergonomics
 - **Auto-unseal** — `SAO_VAULT_PASSPHRASE` env var unseals on startup so LLM keys stay
@@ -88,6 +97,9 @@ Docker Compose stack with a real Anthropic upstream:
 | `docker compose config` | ✅ validates |
 | Live e2e against Anthropic Haiku 4.5 | ✅ real Claude response in OrionII chat |
 
+For future OrionII internal transport changes, SAO-side seam regression can be exercised with
+`scripts/verify-orion-topic-shift.ps1` in either `-PrepareOnly` or full contract-exercise mode.
+
 ## What's open
 
 Tactical follow-ups (not blocking the loop):
@@ -100,7 +112,8 @@ Tactical follow-ups (not blocking the loop):
   on disk. Threat model is local desktop, but Stronghold/DPAPI is a defensible follow-up.
 - **GitHub Releases automation for the OrionII MSI** — workflow exists at
   [.github/workflows/release-installer.yml](https://github.com/jbcupps/OrionII/blob/main/.github/workflows/release-installer.yml);
-  needs a tag push to fire and produce assets the installer-sources registry can consume.
+  now packages the NATS JetStream sidecar by default, then a tag push produces assets the
+  installer-sources registry can consume.
 - **Deep-link enrollment** — `orion://enroll?token=...` URL handler so the bundle page can
   one-click enroll an installed OrionII without paste/file-drop.
 - **Tauri auto-updater** — install once, self-update against SAO. Needs Windows code signing

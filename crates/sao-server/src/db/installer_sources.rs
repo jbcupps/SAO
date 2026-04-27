@@ -92,10 +92,11 @@ pub async fn set_default(
     id: Uuid,
 ) -> Result<Option<InstallerSourceRow>, sqlx::Error> {
     let mut tx = pool.begin().await?;
-    let kind: Option<(String,)> = sqlx::query_as("SELECT kind FROM installer_sources WHERE id = $1")
-        .bind(id)
-        .fetch_optional(&mut *tx)
-        .await?;
+    let kind: Option<(String,)> =
+        sqlx::query_as("SELECT kind FROM installer_sources WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await?;
     let Some((kind,)) = kind else {
         return Ok(None);
     };
