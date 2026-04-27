@@ -84,24 +84,21 @@ pub async fn create_agent(
 }
 
 pub async fn get_agent(pool: &PgPool, id: Uuid) -> Result<Option<AgentRow>, sqlx::Error> {
-    sqlx::query_as::<_, AgentRow>(&format!(
-        "SELECT {SELECT_COLS} FROM agents WHERE id = $1"
-    ))
-    .bind(id)
-    .fetch_optional(pool)
-    .await
+    sqlx::query_as::<_, AgentRow>(&format!("SELECT {SELECT_COLS} FROM agents WHERE id = $1"))
+        .bind(id)
+        .fetch_optional(pool)
+        .await
 }
 
 pub async fn last_egress_at(
     pool: &PgPool,
     agent_id: Uuid,
 ) -> Result<Option<chrono::DateTime<chrono::Utc>>, sqlx::Error> {
-    let row: Option<(Option<chrono::DateTime<chrono::Utc>>,)> = sqlx::query_as(
-        "SELECT MAX(created_at) FROM orion_egress_events WHERE agent_id = $1",
-    )
-    .bind(agent_id)
-    .fetch_optional(pool)
-    .await?;
+    let row: Option<(Option<chrono::DateTime<chrono::Utc>>,)> =
+        sqlx::query_as("SELECT MAX(created_at) FROM orion_egress_events WHERE agent_id = $1")
+            .bind(agent_id)
+            .fetch_optional(pool)
+            .await?;
     Ok(row.and_then(|r| r.0))
 }
 

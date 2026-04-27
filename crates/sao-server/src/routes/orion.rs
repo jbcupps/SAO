@@ -27,13 +27,8 @@ pub fn routes() -> Router<AppState> {
 /// `attribution_user()` to resolve a human owner regardless of which path matched.
 #[derive(Debug, Clone)]
 pub(crate) enum OrionBearerUser {
-    Entity {
-        agent_id: Uuid,
-        human_owner: Uuid,
-    },
-    User {
-        user_id: Uuid,
-    },
+    Entity { agent_id: Uuid, human_owner: Uuid },
+    User { user_id: Uuid },
 }
 
 impl OrionBearerUser {

@@ -236,6 +236,18 @@ To validate the local SAO side of the OrionII integration:
 .\scripts\local-mvp-smoke.ps1 -StartCompose -OllamaBaseUrl "http://host.docker.internal:11434" -OllamaModel "llama3.2"
 ```
 
+To verify the bundle-issued entity contract itself from the SAO side:
+
+```powershell
+# Prepare a fresh bundle + report for a manual OrionII two-window run.
+.\scripts\verify-orion-topic-shift.ps1 -Provider "anthropic" -IdModel "claude-haiku-4-5-20251001" -EgoModel "claude-haiku-4-5-20251001" -PrepareOnly
+
+# Or exercise birth -> llm.generate -> egress directly with the real entity JWT.
+.\scripts\verify-orion-topic-shift.ps1 -Provider "anthropic" -IdModel "claude-haiku-4-5-20251001" -EgoModel "claude-haiku-4-5-20251001" -RunRegressionChecks
+```
+
+See `docs/runbooks/verify-orion-topic-shift.md` for the full SAO-side verification procedure.
+
 To serve real OrionII installers from `/api/agents/:id/bundle`, build the MSI in OrionII first and
 point Compose at it via two host env vars before running `up`:
 

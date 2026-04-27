@@ -16,11 +16,18 @@ SAO's LLM proxy.
 ```powershell
 cd C:\Repo\OrionII
 npm ci
-npm run tauri build -- --bundles msi
+$env:ORIONII_NATS_SERVER = "C:\path\to\nats-server.exe"
+# or:
+# $env:ORIONII_NATS_SERVER_URL = "https://github.com/nats-io/nats-server/releases/download/v2.12.7/nats-server-v2.12.7-windows-amd64.zip"
+# $env:ORIONII_NATS_SERVER_SHA256 = "<expected-sha256>"
+npm run build:installer
 ```
 
 Output: `src-tauri/target/release/bundle/msi/OrionII_<version>_x64_en-US.msi`. SAO will fetch
-this from a URL you give it later — see step 4.
+this from a URL you give it later — see step 4. The build script prepares the bundled
+`nats-server` sidecar first, then builds the MSI with Tauri `externalBin` enabled for that
+release build. By default it downloads the official Windows NATS release ZIP; set
+`ORIONII_NATS_SERVER` or `ORIONII_NATS_SERVER_URL` to pin a local or hosted artifact.
 
 ## 2. Start SAO
 
@@ -124,25 +131,29 @@ The ZIP contains:
 
 | File | Purpose |
 |---|---|
-| `config.json` | SAO base URL + entity JWT (the anchor). Two extra fields are kept as
-fallback for offline mode + back-compat. |
+| `config.json` | SAO base URL + entity JWT (the anchor), plus `bus_transport` requesting OrionII's bundled NATS JetStream entity bus. Fallback model fields are kept for offline mode + back-compat. |
+| `deployment.json` | Non-secret manifest showing the SAO origin the bundle was downloaded from, installer file, HTTP seam, and bus intent. |
 | `OrionII-Setup.msi` | Tauri installer for Windows. |
+| `Install-OrionII.cmd` | Double-click launcher that writes `config.json`, runs the MSI, and starts OrionII. |
+| `Install-OrionII.ps1` | Helper used by the launcher. |
 | `README-FIRST-RUN.txt` | Install steps for the user. |
 
 ## 7. Install + run OrionII
 
-1. Run `OrionII-Setup.msi` and finish the install wizard.
-2. **Either** drop `config.json` into `%APPDATA%\OrionII\config.json`,
-   **or** launch OrionII first and paste the JSON into the yellow **Enroll with SAO** panel
-   that appears in the app — click **Apply config** and OrionII writes it for you and
-   hot-swaps the running core (no restart needed).
-3. The status card flips from `offline` → `birthed`, showing
+1. Extract the downloaded ZIP.
+2. Double-click `Install-OrionII.cmd`.
+3. Finish the MSI wizard if Windows prompts for confirmation. The launcher writes
+   `config.json` to `%APPDATA%\OrionII\config.json` automatically and starts OrionII.
+4. The status card flips from `offline` → `birthed`, showing
    `Birthed as <name> via <provider> (policy v1)` plus owner / id-model / ego-model.
 
 On launch:
 - Bootstrap reads `config.json` (sao_base_url + entity JWT).
 - Calls `GET /api/orion/birth` to fetch live agent metadata, endpoints, scopes, current
   policy, personality seed.
+- Starts OrionII's entity-internal EventBus. The SAO bundle requests `nats_jetstream`; if the
+  nats-server sidecar binary is not available yet, OrionII logs the issue and falls back to
+  `in_memory` so the entity remains usable.
 - Adopts the SAO-assigned `agent_id` as the local `orion_id`.
 - The model router is in `SaoProxyWithFallback` mode: every Id/Ego prompt POSTs to
   `/api/llm/generate` with `Authorization: Bearer <entity-JWT>`. Keys never leave SAO.
@@ -165,13 +176,25 @@ In OrionII:
 
 ## 9. Re-issue / revoke
 
-- **Re-download bundle** — revokes the old token and mints a new one. Re-paste the new
-  config.json (or drop it into `%APPDATA%\OrionII\` again).
+- **Re-download bundle** — revokes the old token and mints a new one. Extract it and
+  double-click `Install-OrionII.cmd` again; it overwrites `%APPDATA%\OrionII\config.json`
+  with the new token before launching OrionII.
 - **Delete the agent in SAO** — bulk-revokes all of its tokens. Subsequent `/api/orion/policy`
   / `/api/llm/generate` calls from the old install return 401.
 - **Roll the installer source forward** — register a new source with a new sha, set as
   default. New agents pin to the new sha; existing agents keep their original pin so they
   stay reproducible.
+
+## SAO-side seam verification
+
+When OrionII changes its internal transport but the SAO contract should stay stable, use
+`.\scripts\verify-orion-topic-shift.ps1` instead of relying on the smoke script alone.
+
+- `-PrepareOnly` creates a fresh agent + bundle + report for a manual two-window UAT pass.
+- default mode exercises `birth -> llm.generate -> egress` directly with the bundle's entity JWT.
+- `-RunRegressionChecks` adds token rotation, duplicate egress, restart continuity, and revocation.
+
+Full procedure: `docs/runbooks/verify-orion-topic-shift.md`.
 
 ## What lives where on disk (inside the container)
 
@@ -235,5 +258,5 @@ npm ci
 npm run build
 cargo test --manifest-path src-tauri\Cargo.toml --locked
 cargo clippy --manifest-path src-tauri\Cargo.toml --locked --all-targets -- -D warnings
-npm run tauri build -- --bundles msi
+npm run build:installer
 ```
