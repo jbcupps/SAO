@@ -164,26 +164,49 @@ Write-Host "SAO baseline Entra ID security groups are ready."
 
 ## Entity Lifecycle (OrionII)
 
-SAO is the issuer of OrionII entities. The full flow is in
+SAO is the issuer of OrionII entities. Canonical project status is in
+[docs/STATUS.md](docs/STATUS.md); the full local walkthrough is in
 [docs/runbooks/local-orion-sao-mvp.md](docs/runbooks/local-orion-sao-mvp.md). At a glance:
 
-1. Admin signs in, opens **/admin/llm-providers**, and per-provider:
-   - OpenAI / Anthropic / xAI Grok / Google Gemini — paste the API key, tick approved models,
-     set a default, click **Test connection** to confirm with a real ping.
-   - Ollama — set the base URL, click **Refresh models** to pull the live list, tick allowed
-     ones.
+1. Admin signs in and configures **/admin/llm-providers** (OpenAI / Anthropic / xAI Grok /
+   Google Gemini / Ollama). Each card has key-format hints, a console link, preset model list,
+   and a **Test connection** button that exercises the real upstream call path. Keys are
+   stored encrypted in the vault; admins never see the key after save. **Every entity call
+   goes through `POST /api/llm/generate` on SAO** — keys never leave the server, every prompt
+   is auditable, and key rotation/revocation is instant.
 
-   Keys are stored encrypted in the vault; admins never see the key after save. **Every entity
-   call goes through `POST /api/llm/generate` on SAO**, so keys never leave the server, every
-   prompt is auditable, and key rotation/revocation is instant.
-2. User signs in, opens **/agents**, registers a new entity (name + provider + Id/Ego model).
-3. User clicks **Download bundle**. SAO mints a fresh OIDC-shaped entity JWT (revoking any
-   prior tokens for that agent), packages a ZIP with `config.json` + `OrionII-Setup.msi`.
-4. User installs OrionII, drops `config.json` into `%APPDATA%\OrionII\`, launches the app.
-5. OrionII adopts the SAO-assigned identity, calls `POST /api/llm/generate` for every Id/Ego
-   prompt — keys never leave SAO. Per-agent egress events stream into **/agents/:id/events**.
+2. Admin registers an OrionII installer source under **/admin/installer-sources** — paste a
+   URL (convention: GitHub Releases `/releases/latest/download/<asset>`), click **Probe
+   sha256**, then **Register + warm cache**. SAO downloads, sha-verifies, and caches the MSI
+   under `SAO_DATA_DIR/installers/<sha>/`. No host shell access required. New agents auto-pin
+   to the current default's sha; existing agents keep their original pin so they stay
+   reproducible.
 
-Deleting an agent in SAO bulk-revokes its tokens.
+3. User signs in, opens **/agents**, registers a new entity (name + provider + Id/Ego model).
+
+4. User clicks **Download bundle**. SAO mints a fresh OIDC-shaped entity JWT (revoking any
+   prior tokens for that agent), packages a ZIP with `config.json` (the anchor:
+   `sao_base_url` + `agent_token`) + `OrionII-Setup.msi` (from the cached pin).
+
+5. User installs OrionII. Either drops `config.json` into `%APPDATA%\OrionII\` **or** launches
+   the app and pastes the JSON into the in-app **Enroll with SAO** panel — OrionII writes it
+   and hot-swaps the running core, no restart needed.
+
+6. On every launch, OrionII calls `GET /api/orion/birth` with the entity bearer to fetch
+   live agent metadata, endpoints, scopes, current policy, and personality seed. Admin-side
+   config changes (provider switch, model swap, policy update) take effect on the next launch
+   with no re-bundling.
+
+7. Every Id/Ego prompt POSTs to `/api/llm/generate` on SAO — keys never leave the server.
+   Per-agent egress events stream into **/agents/:id/events**.
+
+Deleting an agent in SAO bulk-revokes its tokens. Re-downloading a bundle revokes the prior
+token for that agent (one live token per agent).
+
+> Note: provider keys live in the SAO vault and are sealed at rest. Set
+> `SAO_VAULT_PASSPHRASE` so the container auto-unseals on every restart — otherwise
+> `/api/llm/generate` returns 503 (`vault is sealed`) until you POST `/api/vault/unseal`
+> from the admin UI.
 
 ## Development & Contributing
 

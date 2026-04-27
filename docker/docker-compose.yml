@@ -13,6 +13,10 @@ services:
       SAO_JWT_SECRET: ${SAO_JWT_SECRET:-}
       SAO_LOCAL_BOOTSTRAP: ${SAO_LOCAL_BOOTSTRAP:-false}
       SAO_LOCAL_ADMIN_USERNAME: ${SAO_LOCAL_ADMIN_USERNAME:-local-admin}
+      # Auto-unseal the vault on startup so LLM provider keys stay readable across container
+      # restarts. Read at runtime by determine_vault_state(). Use the same value you passed to
+      # bootstrap-local (SAO_LOCAL_VAULT_PASSPHRASE) — they are the same passphrase.
+      SAO_VAULT_PASSPHRASE: ${SAO_VAULT_PASSPHRASE:-${SAO_LOCAL_VAULT_PASSPHRASE:-}}
       DATABASE_URL: postgres://${POSTGRES_USER:-sao}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in your environment or .env}@db:5432/${POSTGRES_DB:-sao}
       SAO_RP_ID: ${SAO_RP_ID:-localhost}
       SAO_RP_ORIGIN: ${SAO_RP_ORIGIN:-http://localhost:3100}

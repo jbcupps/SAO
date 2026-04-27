@@ -127,6 +127,61 @@ Returns 503 if the installer is not staged with a clear remediation message.
 Lists `orion_egress_events` rows for the agent. Pagination via `?limit=&offset=`. Backs the
 `/agents/:id/events` page in the SAO UI.
 
+### `GET /api/orion/birth` *(entity bearer ONLY)*
+
+Returns one rich payload OrionII uses to seed its runtime config on every launch:
+
+```json
+{
+  "birthedAt": "2026-04-26T21:17:30Z",
+  "clientVersionMin": "0.1.0",
+  "agent": {
+    "id": "...", "name": "abigail", "createdAt": "...",
+    "defaultProvider": "anthropic",
+    "defaultIdModel": "claude-haiku-4-5-20251001",
+    "defaultEgoModel": "claude-haiku-4-5-20251001"
+  },
+  "endpoints": {
+    "saoBaseUrl": "http://localhost:3100",
+    "policyUrl": "/api/orion/policy",
+    "egressUrl": "/api/orion/egress",
+    "llmUrl": "/api/llm/generate",
+    "birthUrl": "/api/orion/birth"
+  },
+  "owner": { "userId": "...", "username": "local-admin" },
+  "scopes": ["orion:policy", "orion:egress", "llm:generate"],
+  "policy": { "version": 1, "source": "sao", "rules": [...], "updatedAt": "..." },
+  "personalitySeed": { "name": "...", "stance": "...", "drives": [...], "deontological": 0.34, "virtue": 0.33, "consequential": 0.33 }
+}
+```
+
+Audit: `orion.birth` (attributed to `human_owner` from the JWT). Rejects user JWTs with 403.
+
+### Admin installer-source registry
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/admin/installer-sources` | List all registered sources. |
+| POST | `/api/admin/installer-sources/probe` | Body `{ "url": "..." }`. Computes sha256 of upstream without persisting. |
+| POST | `/api/admin/installer-sources` | Body: kind=`orion-msi` (default), url, filename, version, expected_sha256 (64-hex), is_default. Pre-warms the cache; idempotent on duplicate sha. |
+| POST | `/api/admin/installer-sources/:id/set-default` | Promote a source to the default. |
+| DELETE | `/api/admin/installer-sources/:id` | Delete a source row. Cached files on disk are not GC'd by this call. |
+
+Cache layout under `SAO_DATA_DIR/installers/`:
+```
+<sha>/
+  <filename>          -- the verified artifact
+  .url                -- the source URL for traceability
+```
+
+`agents.installer_sha256/installer_filename/installer_version` pin a specific artifact to an
+agent. The bundle endpoint resolves in order:
+
+1. Pinned cache hit (re-verifies sha on every serve).
+2. Pinned-by-sha refetch from the matching `installer_sources` row when the cache file is missing.
+3. Default source fetch + auto-pin (covers agents created before any source existed).
+4. Legacy `SAO_ORION_INSTALLER_PATH` env var (back-compat with mount-based deployments).
+
 ### Admin LLM provider management
 
 Supported providers: `openai`, `anthropic`, `grok` (xAI), `gemini` (Google), `ollama` (local).
@@ -183,8 +238,25 @@ Three identities, three token shapes:
 
 ## CSRF Boundary
 
-`/api/orion/*` and `/api/llm/generate` are machine-client route groups. They accept Bearer auth
-and bypass browser CSRF. The general browser API keeps CSRF and origin enforcement intact.
+`/api/orion/*` and `/api/llm/*` are machine-client route groups. They accept Bearer auth and
+bypass browser CSRF (see `is_orion_machine_request` in [security.rs](crates/sao-server/src/security.rs)).
+The general browser API keeps CSRF and origin enforcement intact. Admin routes (including
+`/api/admin/installer-sources/*` and `/api/admin/llm-providers/*`) require browser sessions and
+CSRF tokens — they cannot be exercised from a curl/bearer flow without first attaching a
+session cookie.
+
+## Vault unseal
+
+The vault holds provider API keys (`provider:<name>:api_key`) and OIDC client secrets
+encrypted under a passphrase-derived KEK. After every container restart it boots **sealed** —
+the LLM proxy returns 503 (`vault is sealed; cannot read provider key`) until something
+unseals it. Two paths:
+
+1. **Manual** — admin browser → `POST /api/vault/unseal` with the passphrase.
+2. **Auto** (recommended for local dev) — set `SAO_VAULT_PASSPHRASE` in the SAO container
+   environment. `determine_vault_state` reads it on startup and unseals automatically. The
+   compose file already wires `SAO_VAULT_PASSPHRASE` from `SAO_LOCAL_VAULT_PASSPHRASE` for
+   convenience.
 
 ## Idempotency
 
