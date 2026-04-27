@@ -496,7 +496,11 @@ fn is_orion_machine_request(path: &str, headers: &HeaderMap) -> bool {
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
         .is_some_and(|value| value.starts_with("Bearer "));
-    has_bearer && (path == "/api/orion/egress" || path.starts_with("/api/orion/"))
+    has_bearer
+        && (path == "/api/orion/egress"
+            || path.starts_with("/api/orion/")
+            || path == "/api/llm/generate"
+            || path.starts_with("/api/llm/"))
 }
 
 fn rate_limit_bucket(method: &Method, path: &str) -> Option<(&'static str, usize, Duration)> {
@@ -580,9 +584,21 @@ mod tests {
             "/api/orion/egress",
             &headers
         ));
+        assert!(super::is_orion_machine_request(
+            "/api/orion/birth",
+            &headers
+        ));
+        assert!(super::is_orion_machine_request(
+            "/api/llm/generate",
+            &headers
+        ));
         assert!(!super::is_orion_machine_request("/api/agents", &headers));
         assert!(!super::is_orion_machine_request(
             "/api/orion/egress",
+            &HeaderMap::new()
+        ));
+        assert!(!super::is_orion_machine_request(
+            "/api/llm/generate",
             &HeaderMap::new()
         ));
     }
