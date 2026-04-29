@@ -6,7 +6,8 @@ use super::{describe_transport_error, GenerateRequest, LlmError};
 struct MessagesRequest<'a> {
     model: &'a str,
     max_tokens: u32,
-    temperature: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
     #[serde(skip_serializing_if = "str::is_empty")]
     system: &'a str,
     messages: Vec<Message<'a>>,

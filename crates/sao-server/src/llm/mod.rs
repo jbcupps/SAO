@@ -22,14 +22,26 @@ pub struct GenerateRequest {
     #[serde(default)]
     pub system: String,
     pub prompt: String,
-    #[serde(default = "default_temperature")]
-    pub temperature: f32,
+    /// Optional sampling temperature. When `None` (the default), the upstream provider
+    /// uses its own model default. Required for GPT-5.x and reasoning models that
+    /// reject any non-default value — see `TEMPERATURE_LOCKED_MODEL_PREFIXES`.
+    #[serde(default)]
+    pub temperature: Option<f32>,
     #[serde(default)]
     pub role: String,
 }
 
-fn default_temperature() -> f32 {
-    0.2
+/// Model-name prefixes whose upstream APIs reject any non-default `temperature`.
+/// Dispatch strips temperature for these models even if the client passes one,
+/// so older OrionII bundles don't 400 on every Ego call. Match is case-insensitive
+/// prefix-match against `req.model`.
+const TEMPERATURE_LOCKED_MODEL_PREFIXES: &[&str] = &["gpt-5", "o3", "o4-mini", "o4."];
+
+fn temperature_is_locked(model: &str) -> bool {
+    let lower = model.to_ascii_lowercase();
+    TEMPERATURE_LOCKED_MODEL_PREFIXES
+        .iter()
+        .any(|prefix| lower.starts_with(prefix))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -117,6 +129,18 @@ pub async fn dispatch(
             model: req.model.clone(),
         });
     }
+
+    // Belt-and-braces: strip temperature for known-locked models even if a client
+    // (e.g. an older OrionII bundle) sends one. Without this, every Ego call against
+    // gpt-5* fails with `400 unsupported_value`.
+    let effective_req = if temperature_is_locked(&req.model) && req.temperature.is_some() {
+        let mut stripped = req.clone();
+        stripped.temperature = None;
+        std::borrow::Cow::Owned(stripped)
+    } else {
+        std::borrow::Cow::Borrowed(req)
+    };
+    let req = effective_req.as_ref();
 
     let started = std::time::Instant::now();
     let text = match req.provider.as_str() {

@@ -47,7 +47,7 @@ any `agentId` in the body.
 {
   "agentId": "optional-sao-agent-id",
   "orionId": "00000000-0000-0000-0000-000000000000",
-  "clientVersion": "0.1.0",
+  "clientVersion": "0.1.1",
   "events": [
     {
       "id": "00000000-0000-0000-0000-000000000001",
@@ -135,7 +135,7 @@ outside the bus:
   "sao_base_url": "http://localhost:3100",
   "agent_id": "...",
   "agent_token": "...",
-  "client_version_min": "0.1.0",
+  "client_version_min": "0.1.1",
   "bus_transport": { "kind": "nats_jetstream", "port": 4222 }
 }
 ```
@@ -160,7 +160,7 @@ Returns one rich payload OrionII uses to seed its runtime config on every launch
 ```json
 {
   "birthedAt": "2026-04-26T21:17:30Z",
-  "clientVersionMin": "0.1.0",
+  "clientVersionMin": "0.1.1",
   "agent": {
     "id": "...", "name": "abigail", "createdAt": "...",
     "defaultProvider": "anthropic",

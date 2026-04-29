@@ -13,7 +13,8 @@ struct OllamaGenerateBody<'a> {
 
 #[derive(Serialize)]
 struct Options {
-    temperature: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
 }
 
 #[derive(Deserialize)]

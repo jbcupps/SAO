@@ -883,12 +883,14 @@ async fn test_llm_provider(
     }
 
     // Bypass approved-model gate on test calls so admins can probe new models before saving them.
+    // Temperature is intentionally None: GPT-5.x and reasoning models reject any non-default
+    // value, and the test only needs a heartbeat reply, not deterministic output.
     let test_req = crate::llm::GenerateRequest {
         provider: provider.clone(),
         model: model.clone(),
         system: "You are a connectivity test for SAO. Reply briefly.".to_string(),
         prompt: req.prompt.clone().unwrap_or_else(|| "ping".to_string()),
-        temperature: 0.0,
+        temperature: None,
         role: "test".to_string(),
     };
 

@@ -26,7 +26,8 @@ struct Part<'a> {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct GenerationConfig {
-    temperature: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
     max_output_tokens: u32,
 }
 

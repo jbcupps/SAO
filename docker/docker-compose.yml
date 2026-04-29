@@ -34,7 +34,7 @@ services:
       # Optional legacy path: explicit MSI path inside the container, only used when no
       # installer source is registered under /admin/installer-sources. Newer setups should
       # register a source instead — SAO will download + sha-verify + cache automatically.
-      SAO_ORION_INSTALLER_PATH: ${SAO_ORION_INSTALLER_PATH:-/installer/${SAO_ORION_INSTALLER_FILENAME:-OrionII_0.1.0_x64_en-US.msi}}
+      SAO_ORION_INSTALLER_PATH: ${SAO_ORION_INSTALLER_PATH:-/installer/${SAO_ORION_INSTALLER_FILENAME:-OrionII_0.1.1_x64_en-US.msi}}
     volumes:
       # `sao-data` holds: jwt_secret.bin, installer cache (installers/<sha>/<filename>),
       # and any other durable runtime state.

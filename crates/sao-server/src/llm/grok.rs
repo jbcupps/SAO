@@ -8,7 +8,8 @@ use super::{describe_transport_error, GenerateRequest, LlmError};
 struct ChatRequest<'a> {
     model: &'a str,
     messages: Vec<Message<'a>>,
-    temperature: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
 }
 
 #[derive(Serialize)]

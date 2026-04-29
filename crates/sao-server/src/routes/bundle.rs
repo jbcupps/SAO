@@ -268,7 +268,7 @@ async fn download_bundle(
         "agent_id": agent.id,
         "agent_name": agent.name.clone(),
         "agent_token": minted.jwt,
-        "client_version_min": "0.1.0",
+        "client_version_min": "0.1.1",
         "bus_transport": bus_transport,
         "fallback": {
             "default_provider": provider,

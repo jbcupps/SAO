@@ -198,7 +198,7 @@ pub struct OrionBirthResponse {
     personality_seed: BirthPersonalitySeed,
 }
 
-const ORION_CLIENT_VERSION_MIN: &str = "0.1.0";
+const ORION_CLIENT_VERSION_MIN: &str = "0.1.1";
 
 async fn get_birth(
     user: OrionBearerUser,

@@ -97,7 +97,7 @@ Go to **/admin/installer-sources** → **+ Register installer source**:
 
 1. Paste a download URL — convention is the GitHub Releases `latest` URL:
    ```
-   https://github.com/jbcupps/OrionII/releases/latest/download/OrionII_0.1.0_x64_en-US.msi
+   https://github.com/jbcupps/OrionII/releases/latest/download/OrionII_0.1.1_x64_en-US.msi
    ```
    (Or any URL SAO can `GET`.)
 2. Click **Probe sha256** — SAO computes the digest of what it sees at that URL.
