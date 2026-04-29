@@ -97,9 +97,9 @@ export default function AgentEventsPage() {
           <h1 className="text-2xl font-bold text-white">
             Events — {agent ? agent.agent_id.slice(0, 8) : id.slice(0, 8)}
           </h1>
-          {agent?.last_heartbeat && (
+          {agent?.last_seen_at && (
             <p className="text-xs text-gray-400 mt-1">
-              Last heartbeat: {new Date(agent.last_heartbeat).toLocaleString()}
+              Last seen: {new Date(agent.last_seen_at).toLocaleString()}
             </p>
           )}
         </div>

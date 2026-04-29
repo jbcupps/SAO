@@ -47,7 +47,7 @@ Docker Compose stack with a real Anthropic upstream:
 - Per-card **Download bundle** (mints fresh JWT, packages cached MSI + config/deployment
   manifests + one-click launcher + README) and **Logs** (per-agent live egress feed, polls every
   5s).
-- Live `last_heartbeat` derived from the latest egress event.
+- Live `last_seen_at` + derived `presence` (online/offline) computed from the latest egress event.
 
 ### Runtime config — dynamic via birth event
 - `GET /api/orion/birth` returns one rich payload: agent metadata, endpoint URLs, owner,

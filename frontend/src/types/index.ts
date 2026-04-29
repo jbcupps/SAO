@@ -18,6 +18,8 @@ export interface VaultSecret {
   updated_at: string;
 }
 
+export type AgentPresence = 'online' | 'offline';
+
 export interface Agent {
   id: string;
   name: string;
@@ -31,6 +33,10 @@ export interface Agent {
   default_provider?: string | null;
   default_id_model?: string | null;
   default_ego_model?: string | null;
+  /** ISO timestamp of the agent's most recent egress event; null if never seen. */
+  last_seen_at?: string | null;
+  /** Derived presence: online if last_seen_at within 5 min, else offline. */
+  presence?: AgentPresence;
 }
 
 export interface AgentLlmProviderOption {
@@ -134,7 +140,10 @@ export interface AgentStatusResponse {
   default_id_model?: string | null;
   default_ego_model?: string | null;
   available_llm_providers?: AgentLlmProviderOption[];
-  last_heartbeat?: string | null;
+  /** ISO timestamp of the agent's most recent egress event; null if never seen. */
+  last_seen_at?: string | null;
+  /** Derived presence: online if last_seen_at within 5 min, else offline. */
+  presence?: AgentPresence;
 }
 
 export interface OidcProvider {

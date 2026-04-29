@@ -4,8 +4,8 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use chrono::Utc;
-use serde::Deserialize;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
 use uuid::Uuid;
@@ -125,19 +125,53 @@ async fn validate_agent_llm_defaults(
     })
 }
 
+/// Serialization wrapper that adds the M2 presence fields onto the raw `AgentRow`.
+/// `AgentRow` stays a pure DB-shape; route enrichment lives here.
+#[derive(Serialize)]
+struct AgentListItem {
+    #[serde(flatten)]
+    row: crate::db::agents::AgentRow,
+    last_seen_at: Option<DateTime<Utc>>,
+    presence: &'static str,
+}
+
 async fn list_agents(user: AuthUser, State(state): State<AppState>) -> (StatusCode, Json<Value>) {
     let owner_filter = if user.is_admin() {
         None
     } else {
         Some(user.user_id)
     };
-    match crate::db::agents::list_agents(&state.inner.db, owner_filter).await {
-        Ok(agents) => (StatusCode::OK, Json(json!({ "agents": agents }))),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": e.to_string() })),
-        ),
-    }
+    let rows = match crate::db::agents::list_agents(&state.inner.db, owner_filter).await {
+        Ok(rows) => rows,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            );
+        }
+    };
+
+    let ids: Vec<Uuid> = rows.iter().map(|row| row.id).collect();
+    // Best-effort: if the egress query fails, surface agents with `presence: "offline"`
+    // rather than 500ing the whole list.
+    let last_seen_map = crate::db::agents::last_egress_at_for_many(&state.inner.db, &ids)
+        .await
+        .unwrap_or_default();
+    let now = Utc::now();
+    let agents: Vec<AgentListItem> = rows
+        .into_iter()
+        .map(|row| {
+            let last_seen_at = last_seen_map.get(&row.id).copied();
+            let presence = crate::db::agents::presence_from_last_seen(now, last_seen_at);
+            AgentListItem {
+                row,
+                last_seen_at,
+                presence,
+            }
+        })
+        .collect();
+
+    (StatusCode::OK, Json(json!({ "agents": agents })))
 }
 
 #[derive(Deserialize)]
@@ -336,10 +370,11 @@ async fn get_agent_status(
         );
     }
 
-    let last_heartbeat = crate::db::agents::last_egress_at(&state.inner.db, id)
+    let last_seen_at = crate::db::agents::last_egress_at(&state.inner.db, id)
         .await
         .ok()
         .flatten();
+    let presence = crate::db::agents::presence_from_last_seen(Utc::now(), last_seen_at);
     let available_llm_providers = crate::db::llm_providers::list_enabled_catalog(&state.inner.db)
         .await
         .unwrap_or_default();
@@ -358,7 +393,8 @@ async fn get_agent_status(
             "default_id_model": agent.default_id_model,
             "default_ego_model": agent.default_ego_model,
             "available_llm_providers": available_llm_providers,
-            "last_heartbeat": last_heartbeat,
+            "last_seen_at": last_seen_at,
+            "presence": presence,
         })),
     )
 }
@@ -441,10 +477,11 @@ async fn update_agent_handler(
         }
     };
 
-    let last_heartbeat = crate::db::agents::last_egress_at(&state.inner.db, id)
+    let last_seen_at = crate::db::agents::last_egress_at(&state.inner.db, id)
         .await
         .ok()
         .flatten();
+    let presence = crate::db::agents::presence_from_last_seen(Utc::now(), last_seen_at);
     let available_llm_providers = crate::db::llm_providers::list_enabled_catalog(&state.inner.db)
         .await
         .unwrap_or_default();
@@ -481,7 +518,8 @@ async fn update_agent_handler(
             "default_id_model": updated.default_id_model,
             "default_ego_model": updated.default_ego_model,
             "available_llm_providers": available_llm_providers,
-            "last_heartbeat": last_heartbeat,
+            "last_seen_at": last_seen_at,
+            "presence": presence,
         })),
     )
 }
