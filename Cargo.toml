@@ -34,6 +34,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 aes-gcm-siv = "0.11"
 argon2 = "0.5"
 sha2 = "0.10"
+blake3 = "1.5"
 zeroize = { version = "1", features = ["derive"] }
 jsonwebtoken = "9"
 webauthn-rs = "0.5"

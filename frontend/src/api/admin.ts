@@ -2,6 +2,7 @@ import { apiRequest } from './client';
 import type {
   AdminEntityOverview,
   User,
+  EntityArchive,
   OidcProvider,
   AuditLogEntry,
   CreateOidcProviderData,
@@ -81,4 +82,11 @@ export async function queryAuditLog(
 
 export async function getAdminEntityOverview(): Promise<AdminEntityOverview> {
   return apiRequest<AdminEntityOverview>('/api/admin/admin-entity');
+}
+
+export async function listEntityArchives(): Promise<EntityArchive[]> {
+  const res = await apiRequest<{ archives: EntityArchive[] }>(
+    '/api/admin/entity-archives',
+  );
+  return res.archives;
 }

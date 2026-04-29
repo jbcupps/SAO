@@ -188,7 +188,13 @@ impl IdentityManager {
     /// itself and registers via the API. This method creates a placeholder entry.
     pub fn create_agent(&self, name: &str) -> Result<(String, PathBuf), String> {
         let uuid = Uuid::new_v4().to_string();
-        let agent_dir = self.identities_dir().join(&uuid);
+        let agent_dir = self.create_agent_with_id(&uuid, name)?;
+        Ok((uuid, agent_dir))
+    }
+
+    /// Create a new agent identity using a caller-owned UUID.
+    pub fn create_agent_with_id(&self, agent_id: &str, name: &str) -> Result<PathBuf, String> {
+        let agent_dir = self.identities_dir().join(agent_id);
 
         // Create agent directory structure
         std::fs::create_dir_all(&agent_dir).map_err(|e| e.to_string())?;
@@ -197,16 +203,16 @@ impl IdentityManager {
         {
             let mut gc = self.global_config.write().map_err(|e| e.to_string())?;
             gc.register_agent(AgentEntry {
-                id: uuid.clone(),
+                id: agent_id.to_string(),
                 name: name.to_string(),
-                directory: PathBuf::from(format!("identities/{}", uuid)),
+                directory: PathBuf::from(format!("identities/{}", agent_id)),
             })
             .map_err(|e| e.to_string())?;
             gc.save(&self.data_root).map_err(|e| e.to_string())?;
         }
 
-        tracing::info!("Created new agent entry: {} ({})", name, uuid);
-        Ok((uuid, agent_dir))
+        tracing::info!("Created new agent entry: {} ({})", name, agent_id);
+        Ok(agent_dir)
     }
 
     /// Create the four signed birth documents for a new agent.
@@ -278,8 +284,63 @@ mutability: evolvable\n"
         self.write_birth_document(agent_dir, "ethics.md", &ethics, false)?;
         self.write_birth_document(agent_dir, "org-map.md", &org_map, false)?;
         self.write_birth_document(agent_dir, "personality.md", &personality, false)?;
+        self.write_birth_config(agent_dir, agent_id, name, agent_type, &created_at)?;
 
         Ok(())
+    }
+
+    pub fn archive_root(&self) -> Result<PathBuf, String> {
+        let gc = self.global_config.read().map_err(|e| e.to_string())?;
+        let archive_path = &gc.workspace.archive_path;
+        Ok(if archive_path.is_absolute() {
+            archive_path.clone()
+        } else {
+            self.data_root.join(archive_path)
+        })
+    }
+
+    pub fn copy_agent_identity_to(
+        &self,
+        agent_id: &str,
+        destination: &Path,
+    ) -> Result<bool, String> {
+        let source = self.agent_dir(agent_id)?;
+        if !source.exists() {
+            return Ok(false);
+        }
+
+        copy_dir_recursive(&source, destination).map_err(|e| e.to_string())?;
+        Ok(true)
+    }
+
+    pub fn copy_agent_identity_for_archive(
+        &self,
+        agent_id: &str,
+        agent_name: &str,
+        destination: &Path,
+    ) -> Result<Option<String>, String> {
+        let (source, identity_agent_id) = {
+            let gc = self.global_config.read().map_err(|e| e.to_string())?;
+            let Some(entry) = gc
+                .find_agent(agent_id)
+                .or_else(|| gc.agents.iter().find(|entry| entry.name == agent_name))
+            else {
+                return Ok(None);
+            };
+            let agent_dir = if entry.directory.is_absolute() {
+                entry.directory.clone()
+            } else {
+                self.data_root.join(&entry.directory)
+            };
+            (agent_dir, entry.id.clone())
+        };
+
+        if !source.exists() {
+            return Ok(None);
+        }
+
+        copy_dir_recursive(&source, destination).map_err(|e| e.to_string())?;
+        Ok(Some(identity_agent_id))
     }
 
     /// Get the agent directory path for a given UUID.
@@ -356,5 +417,120 @@ mutability: evolvable\n"
         let path = agent_dir.join(file_name);
         std::fs::write(&path, contents).map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    fn write_birth_config(
+        &self,
+        agent_dir: &Path,
+        agent_id: &str,
+        name: &str,
+        agent_type: &str,
+        created_at: &str,
+    ) -> Result<(), String> {
+        let config = serde_json::json!({
+            "agent_id": agent_id,
+            "name": name,
+            "agent_type": agent_type,
+            "birth_complete": true,
+            "birth_timestamp": created_at,
+            "documents": ["soul.md", "ethics.md", "org-map.md", "personality.md"],
+            "personality": {
+                "style": "grounded",
+                "tone": "precise",
+                "mutability": "evolvable"
+            }
+        });
+        let path = agent_dir.join("config.json");
+        let contents = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
+        std::fs::write(&path, contents).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+}
+
+fn copy_dir_recursive(source: &Path, destination: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(destination)?;
+
+    for entry in std::fs::read_dir(source)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let target = destination.join(entry.file_name());
+
+        if file_type.is_dir() {
+            copy_dir_recursive(&entry.path(), &target)?;
+        } else if file_type.is_file() {
+            std::fs::copy(entry.path(), target)?;
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn birth_documents_use_caller_owned_agent_id_and_write_config() {
+        let data_root = std::env::temp_dir().join(format!("sao-identity-{}", Uuid::new_v4()));
+        let manager = IdentityManager::new(data_root.clone()).unwrap();
+        let agent_id = Uuid::new_v4().to_string();
+
+        let agent_dir = manager
+            .create_agent_with_id(&agent_id, "Archive Test")
+            .unwrap();
+        manager
+            .create_birth_documents(
+                &agent_id,
+                &agent_dir,
+                "Archive Test",
+                Some("personal"),
+                None,
+            )
+            .unwrap();
+
+        let config: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(agent_dir.join("config.json")).unwrap())
+                .unwrap();
+
+        assert_eq!(config["agent_id"], agent_id);
+        assert_eq!(config["birth_complete"], true);
+        assert!(agent_dir.join("soul.md").exists());
+        assert!(agent_dir.join("personality.md").exists());
+
+        fs::remove_dir_all(data_root).unwrap();
+    }
+
+    #[test]
+    fn archive_copy_falls_back_to_legacy_identity_name_match() {
+        let data_root =
+            std::env::temp_dir().join(format!("sao-identity-legacy-{}", Uuid::new_v4()));
+        let manager = IdentityManager::new(data_root.clone()).unwrap();
+        let legacy_id = Uuid::new_v4().to_string();
+        let db_id = Uuid::new_v4().to_string();
+
+        let agent_dir = manager
+            .create_agent_with_id(&legacy_id, "Legacy Agent")
+            .unwrap();
+        manager
+            .create_birth_documents(
+                &legacy_id,
+                &agent_dir,
+                "Legacy Agent",
+                Some("personal"),
+                None,
+            )
+            .unwrap();
+
+        let archive_dir = data_root.join("archive-test");
+        let copied_id = manager
+            .copy_agent_identity_for_archive(&db_id, "Legacy Agent", &archive_dir)
+            .unwrap();
+
+        assert_eq!(copied_id.as_deref(), Some(legacy_id.as_str()));
+        assert!(archive_dir.join("soul.md").exists());
+        assert!(archive_dir.join("config.json").exists());
+
+        fs::remove_dir_all(data_root).unwrap();
     }
 }

@@ -1,23 +1,35 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  listAgents,
   createAgent,
   deleteAgent,
   downloadAgentBundle,
+  updateAgent,
 } from '../api/agents';
-import { listLlmProviders } from '../api/llm-providers';
-import type { Agent, LlmProvider } from '../types';
+import { listAvailableLlmProviders } from '../api/llm-providers';
+import { AgentLlmFields, buildAgentLlmSelection } from '../components/AgentLlmFields';
+import { listAgents } from '../api/agents';
+import type {
+  Agent,
+  AgentLlmProviderOption,
+  AgentStatusResponse,
+} from '../types';
+
+type AgentLlmSelection = ReturnType<typeof buildAgentLlmSelection>;
+
+const EMPTY_SELECTION: AgentLlmSelection = {
+  default_provider: '',
+  default_id_model: '',
+  default_ego_model: '',
+};
 
 export default function AgentsPage() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [showRegister, setShowRegister] = useState(false);
   const [newAgentName, setNewAgentName] = useState('');
-  const [newProvider, setNewProvider] = useState('');
-  const [newIdModel, setNewIdModel] = useState('');
-  const [newEgoModel, setNewEgoModel] = useState('');
+  const [newSelection, setNewSelection] = useState<AgentLlmSelection>(EMPTY_SELECTION);
   const [error, setError] = useState('');
   const [creating, setCreating] = useState(false);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
@@ -29,22 +41,21 @@ export default function AgentsPage() {
     queryFn: listAgents,
   });
 
-  const { data: providers } = useQuery({
-    queryKey: ['llm-providers'],
-    queryFn: listLlmProviders,
-    // Non-admins can't read this; treat 403 as "no providers" gracefully.
+  const { data: providers, isLoading: providersLoading } = useQuery({
+    queryKey: ['available-llm-providers'],
+    queryFn: listAvailableLlmProviders,
     retry: false,
   });
 
-  const enabledProviders = useMemo<LlmProvider[]>(
-    () => (providers ?? []).filter((p) => p.enabled),
-    [providers],
-  );
+  const availableProviders = providers ?? [];
 
-  const selectedProvider = useMemo(
-    () => enabledProviders.find((p) => p.provider === newProvider),
-    [enabledProviders, newProvider],
-  );
+  useEffect(() => {
+    if (!showRegister || availableProviders.length === 0 || newSelection.default_provider) {
+      return;
+    }
+
+    setNewSelection(buildAgentLlmSelection(availableProviders, '', '', ''));
+  }, [availableProviders, newSelection.default_provider, showRegister]);
 
   const handleRegister = async () => {
     setError('');
@@ -52,12 +63,12 @@ export default function AgentsPage() {
       setError('Agent name is required');
       return;
     }
-    if (enabledProviders.length > 0) {
-      if (!newProvider) {
+    if (availableProviders.length > 0) {
+      if (!newSelection.default_provider) {
         setError('Choose an LLM provider');
         return;
       }
-      if (!newIdModel.trim() || !newEgoModel.trim()) {
+      if (!newSelection.default_id_model || !newSelection.default_ego_model) {
         setError('Choose both Id and Ego models');
         return;
       }
@@ -67,15 +78,13 @@ export default function AgentsPage() {
     try {
       await createAgent({
         name: newAgentName.trim(),
-        default_provider: newProvider || undefined,
-        default_id_model: newIdModel.trim() || undefined,
-        default_ego_model: newEgoModel.trim() || undefined,
+        default_provider: newSelection.default_provider || undefined,
+        default_id_model: newSelection.default_id_model || undefined,
+        default_ego_model: newSelection.default_ego_model || undefined,
       });
       await queryClient.invalidateQueries({ queryKey: ['agents'] });
       setNewAgentName('');
-      setNewProvider('');
-      setNewIdModel('');
-      setNewEgoModel('');
+      setNewSelection(EMPTY_SELECTION);
       setShowRegister(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to register agent');
@@ -90,9 +99,7 @@ export default function AgentsPage() {
     try {
       await downloadAgentBundle(agent.id, agent.name);
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : 'Failed to download bundle',
-      );
+      setError(err instanceof Error ? err.message : 'Failed to download bundle');
     } finally {
       setDownloadingId(null);
     }
@@ -113,6 +120,22 @@ export default function AgentsPage() {
     } finally {
       setDeletingId(null);
     }
+  };
+
+  const handleAgentUpdated = (agentId: string, updated: AgentStatusResponse) => {
+    queryClient.setQueryData<Agent[]>(['agents'], (current) =>
+      current?.map((agent) =>
+        agent.id === agentId
+          ? {
+              ...agent,
+              default_provider: updated.default_provider ?? null,
+              default_id_model: updated.default_id_model ?? null,
+              default_ego_model: updated.default_ego_model ?? null,
+            }
+          : agent,
+      ) ?? [],
+    );
+    queryClient.setQueryData(['agent', agentId], updated);
   };
 
   const stateColor = (state: string) => {
@@ -150,9 +173,7 @@ export default function AgentsPage() {
 
       {showRegister && (
         <div className="bg-gray-800 rounded-xl border border-gray-700 p-6 mb-6 space-y-4">
-          <h2 className="text-lg font-semibold text-white">
-            Register New Agent
-          </h2>
+          <h2 className="text-lg font-semibold text-white">Register New Agent</h2>
 
           <div>
             <label className="block text-xs text-gray-400 mb-1">Name</label>
@@ -165,63 +186,34 @@ export default function AgentsPage() {
             />
           </div>
 
-          {enabledProviders.length === 0 ? (
+          {providersLoading ? (
+            <div className="text-sm text-gray-400">Loading LLM provider options...</div>
+          ) : availableProviders.length === 0 ? (
             <div className="rounded-lg border border-yellow-800 bg-yellow-900/20 p-3 text-sm text-yellow-200">
-              No LLM providers are enabled. Ask an administrator to configure one
+              No enabled LLM providers are available. Ask an administrator to configure one
               under <span className="font-mono">/admin/llm-providers</span>.
             </div>
           ) : (
-            <>
-              <div>
-                <label className="block text-xs text-gray-400 mb-1">
-                  LLM Provider
-                </label>
-                <select
-                  value={newProvider}
-                  onChange={(e) => {
-                    setNewProvider(e.target.value);
-                    const p = enabledProviders.find(
-                      (x) => x.provider === e.target.value,
-                    );
-                    if (p?.default_model) {
-                      setNewIdModel(p.default_model);
-                      setNewEgoModel(p.default_model);
-                    }
-                  }}
-                  className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-blue-500"
-                >
-                  <option value="">Choose provider...</option>
-                  {enabledProviders.map((p) => (
-                    <option key={p.provider} value={p.provider}>
-                      {p.provider}
-                    </option>
-                  ))}
-                </select>
+            <div className="rounded-xl border border-gray-700 bg-gray-900/40 p-4">
+              <div className="mb-3">
+                <h3 className="text-sm font-medium text-white">LLM Runtime Defaults</h3>
+                <p className="text-xs text-gray-500 mt-1">
+                  Every enabled provider stays available to the agent, and this form shows
+                  the approved models for each one. Pick the starting provider and the
+                  default Id and Ego models now, then switch them later from the agent
+                  controls.
+                </p>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs text-gray-400 mb-1">
-                    Id model
-                  </label>
-                  <ModelInput
-                    value={newIdModel}
-                    onChange={setNewIdModel}
-                    options={selectedProvider?.approved_models ?? []}
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs text-gray-400 mb-1">
-                    Ego model
-                  </label>
-                  <ModelInput
-                    value={newEgoModel}
-                    onChange={setNewEgoModel}
-                    options={selectedProvider?.approved_models ?? []}
-                  />
-                </div>
-              </div>
-            </>
+              <AgentLlmFields
+                providers={availableProviders}
+                provider={newSelection.default_provider}
+                idModel={newSelection.default_id_model}
+                egoModel={newSelection.default_ego_model}
+                disabled={creating}
+                onChange={setNewSelection}
+              />
+            </div>
           )}
 
           <div className="flex gap-3">
@@ -236,9 +228,7 @@ export default function AgentsPage() {
               onClick={() => {
                 setShowRegister(false);
                 setNewAgentName('');
-                setNewProvider('');
-                setNewIdModel('');
-                setNewEgoModel('');
+                setNewSelection(EMPTY_SELECTION);
                 setError('');
               }}
               className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 font-medium rounded-lg transition-colors"
@@ -250,9 +240,7 @@ export default function AgentsPage() {
       )}
 
       {isLoading ? (
-        <div className="text-center py-16 text-gray-400">
-          Loading agents...
-        </div>
+        <div className="text-center py-16 text-gray-400">Loading agents...</div>
       ) : agents && agents.length > 0 ? (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {agents.map((agent: Agent) => (
@@ -263,29 +251,19 @@ export default function AgentsPage() {
               <div className="flex items-start justify-between mb-3">
                 <div>
                   <h3 className="text-white font-semibold">{agent.name}</h3>
-                  <p className="text-xs text-gray-500 font-mono mt-0.5">
-                    {agent.id}
-                  </p>
+                  <p className="text-xs text-gray-500 font-mono mt-0.5">{agent.id}</p>
                 </div>
                 <div className="flex items-center gap-1.5">
-                  <span
-                    className={`w-2.5 h-2.5 rounded-full ${stateColor(agent.state)}`}
-                  />
-                  <span className="text-xs text-gray-400 capitalize">
-                    {agent.state}
-                  </span>
+                  <span className={`w-2.5 h-2.5 rounded-full ${stateColor(agent.state)}`} />
+                  <span className="text-xs text-gray-400 capitalize">{agent.state}</span>
                 </div>
               </div>
 
-              {agent.default_provider && (
-                <div className="mb-3 text-xs text-gray-300">
-                  <span className="text-gray-500">LLM:</span>{' '}
-                  <span className="font-mono">
-                    {agent.default_provider} / {agent.default_id_model} /{' '}
-                    {agent.default_ego_model}
-                  </span>
-                </div>
-              )}
+              <AgentLlmEditorCard
+                agent={agent}
+                providers={availableProviders}
+                onUpdated={(updated) => handleAgentUpdated(agent.id, updated)}
+              />
 
               {agent.capabilities.length > 0 && (
                 <div className="flex flex-wrap gap-1.5 mb-3">
@@ -321,9 +299,7 @@ export default function AgentsPage() {
                       disabled={deletingId === agent.id}
                       className="text-xs px-3 py-1.5 bg-red-600 hover:bg-red-700 disabled:bg-red-900 text-white rounded transition-colors"
                     >
-                      {deletingId === agent.id
-                        ? 'Deleting...'
-                        : 'Confirm delete'}
+                      {deletingId === agent.id ? 'Deleting...' : 'Confirm delete'}
                     </button>
                     <button
                       onClick={() => setConfirmDeleteId(null)}
@@ -367,33 +343,138 @@ export default function AgentsPage() {
   );
 }
 
-function ModelInput({
-  value,
-  onChange,
-  options,
+function AgentLlmEditorCard({
+  agent,
+  providers,
+  onUpdated,
 }: {
-  value: string;
-  onChange: (v: string) => void;
-  options: string[];
+  agent: Agent;
+  providers: AgentLlmProviderOption[];
+  onUpdated: (agent: AgentStatusResponse) => void;
 }) {
-  const listId = `models-${Math.random().toString(36).slice(2, 9)}`;
+  const [editing, setEditing] = useState(false);
+  const [selection, setSelection] = useState<AgentLlmSelection>(EMPTY_SELECTION);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    if (providers.length === 0) {
+      setSelection(EMPTY_SELECTION);
+      return;
+    }
+
+    setSelection(
+      buildAgentLlmSelection(
+        providers,
+        agent.default_provider ?? '',
+        agent.default_id_model ?? '',
+        agent.default_ego_model ?? '',
+      ),
+    );
+  }, [
+    agent.default_ego_model,
+    agent.default_id_model,
+    agent.default_provider,
+    providers,
+  ]);
+
+  const handleSave = async () => {
+    setError('');
+    setSaved(false);
+    setSaving(true);
+    try {
+      const updated = await updateAgent(agent.id, selection);
+      onUpdated(updated);
+      setSaved(true);
+      setEditing(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update LLM settings');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
-    <>
-      <input
-        type="text"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        list={options.length > 0 ? listId : undefined}
-        placeholder="model name"
-        className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
-      />
-      {options.length > 0 && (
-        <datalist id={listId}>
-          {options.map((m) => (
-            <option key={m} value={m} />
-          ))}
-        </datalist>
+    <div className="mb-4 rounded-xl border border-gray-700 bg-gray-900/40 p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-xs uppercase tracking-wide text-gray-500">LLM Runtime</div>
+          {agent.default_provider ? (
+            <div className="mt-1 text-sm text-gray-200">
+              <span className="text-gray-500">Active:</span>{' '}
+              <span className="font-mono">
+                {agent.default_provider} / {agent.default_id_model} / {agent.default_ego_model}
+              </span>
+            </div>
+          ) : (
+            <div className="mt-1 text-sm text-yellow-200">No default LLM configured yet.</div>
+          )}
+        </div>
+        <button
+          onClick={() => {
+            setEditing((current) => !current);
+            setSaved(false);
+            setError('');
+          }}
+          className="text-xs px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded transition-colors"
+        >
+          {editing ? 'Close' : 'Switch LLM'}
+        </button>
+      </div>
+
+      <p className="mt-2 text-xs text-gray-500">
+        Provider and model defaults can be changed without rebuilding the agent record.
+      </p>
+
+      {editing && (
+        <div className="mt-4 space-y-3">
+          <AgentLlmFields
+            providers={providers}
+            provider={selection.default_provider}
+            idModel={selection.default_id_model}
+            egoModel={selection.default_ego_model}
+            disabled={saving}
+            onChange={setSelection}
+          />
+
+          {error && (
+            <div className="rounded border border-red-800 bg-red-900/30 p-2 text-xs text-red-300">
+              {error}
+            </div>
+          )}
+          {saved && <div className="text-xs text-green-400">LLM defaults updated.</div>}
+
+          <div className="flex gap-2">
+            <button
+              onClick={handleSave}
+              disabled={saving || providers.length === 0}
+              className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-900 text-white text-xs rounded-lg"
+            >
+              {saving ? 'Saving...' : 'Save LLM defaults'}
+            </button>
+            <button
+              onClick={() => {
+                setSelection(
+                  buildAgentLlmSelection(
+                    providers,
+                    agent.default_provider ?? '',
+                    agent.default_id_model ?? '',
+                    agent.default_ego_model ?? '',
+                  ),
+                );
+                setEditing(false);
+                setSaved(false);
+                setError('');
+              }}
+              disabled={saving}
+              className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs rounded-lg"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
       )}
-    </>
+    </div>
   );
 }

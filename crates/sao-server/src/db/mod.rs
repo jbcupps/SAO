@@ -3,6 +3,7 @@ pub mod admin_entity;
 pub mod agent_tokens;
 pub mod agents;
 pub mod audit;
+pub mod entity_archives;
 pub mod installer_sources;
 pub mod llm_providers;
 pub mod migrate;

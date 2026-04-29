@@ -141,9 +141,19 @@ pub struct BirthAgent {
     id: Uuid,
     name: String,
     created_at: DateTime<Utc>,
+    birth_status: String,
+    birthed_at: Option<DateTime<Utc>>,
     default_provider: Option<String>,
     default_id_model: Option<String>,
     default_ego_model: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BirthLlmProvider {
+    provider: String,
+    approved_models: Vec<String>,
+    default_model: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -184,6 +194,7 @@ pub struct OrionBirthResponse {
     owner: BirthOwner,
     scopes: Vec<&'static str>,
     policy: OrionPolicyResponse,
+    available_llm_providers: Vec<BirthLlmProvider>,
     personality_seed: BirthPersonalitySeed,
 }
 
@@ -226,6 +237,16 @@ async fn get_birth(
 
     let sao_base_url = std::env::var("SAO_PUBLIC_BASE_URL")
         .unwrap_or_else(|_| "http://localhost:3100".to_string());
+    let available_llm_providers = crate::db::llm_providers::list_enabled_catalog(&state.inner.db)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|provider| BirthLlmProvider {
+            provider: provider.provider,
+            approved_models: provider.approved_models,
+            default_model: provider.default_model,
+        })
+        .collect();
 
     let response = OrionBirthResponse {
         birthed_at: Utc::now(),
@@ -234,6 +255,8 @@ async fn get_birth(
             id: agent.id,
             name: agent.name.clone(),
             created_at: agent.created_at,
+            birth_status: agent.birth_status.clone(),
+            birthed_at: agent.birthed_at,
             default_provider: agent.default_provider.clone(),
             default_id_model: agent.default_id_model.clone(),
             default_ego_model: agent.default_ego_model.clone(),
@@ -251,6 +274,7 @@ async fn get_birth(
         },
         scopes: vec!["orion:policy", "orion:egress", "llm:generate"],
         policy: orion_policy(),
+        available_llm_providers,
         personality_seed: BirthPersonalitySeed {
             name: agent.name,
             stance: "calm, direct, worker-owned companion".to_string(),

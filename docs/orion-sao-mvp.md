@@ -119,7 +119,7 @@ Errors:
 Mints a fresh entity JWT, revokes prior tokens for the same agent, packages a ZIP:
 
 ```
-config.json            -- sao_base_url, agent_id, agent_token (JWT), bus_transport, defaults
+config.json            -- sao_base_url, agent_id, agent_name, agent_token (JWT), bus_transport, defaults
 deployment.json        -- non-secret manifest: downloaded_from, installer file, HTTP seam, bus intent
 OrionII-Setup.msi      -- Tauri installer (read from SAO_ORION_INSTALLER_PATH inside the container)
 Install-OrionII.cmd    -- double-click Windows launcher that installs and writes config.json

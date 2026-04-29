@@ -1,5 +1,6 @@
 import { apiRequest } from './client';
 import type {
+  AgentLlmProviderOption,
   LlmProvider,
   LlmProviderTestResult,
   UpdateLlmProviderData,
@@ -8,6 +9,13 @@ import type {
 export async function listLlmProviders(): Promise<LlmProvider[]> {
   const response = await apiRequest<{ providers: LlmProvider[] }>(
     '/api/admin/llm-providers',
+  );
+  return response.providers;
+}
+
+export async function listAvailableLlmProviders(): Promise<AgentLlmProviderOption[]> {
+  const response = await apiRequest<{ providers: AgentLlmProviderOption[] }>(
+    '/api/llm/providers',
   );
   return response.providers;
 }
@@ -35,13 +43,18 @@ export async function probeOllamaModels(baseUrl: string): Promise<string[]> {
 
 export async function testLlmProvider(
   provider: string,
-  model?: string,
+  options: {
+    model?: string;
+    api_key?: string;
+    base_url?: string;
+    prompt?: string;
+  } = {},
 ): Promise<LlmProviderTestResult> {
   return apiRequest<LlmProviderTestResult>(
     `/api/admin/llm-providers/${provider}/test`,
     {
       method: 'POST',
-      body: JSON.stringify({ model }),
+      body: JSON.stringify(options),
     },
   );
 }

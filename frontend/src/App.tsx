@@ -16,6 +16,7 @@ import SkillsCatalogPage from './pages/SkillsCatalogPage';
 import AdminSkillReviewPage from './pages/AdminSkillReviewPage';
 import AdminLlmProvidersPage from './pages/AdminLlmProvidersPage';
 import AdminInstallerSourcesPage from './pages/AdminInstallerSourcesPage';
+import AdminEntityArchivesPage from './pages/AdminEntityArchivesPage';
 import AgentEventsPage from './pages/AgentEventsPage';
 
 function AppRoutes() {
@@ -104,6 +105,14 @@ function AppRoutes() {
           element={
             <ProtectedRoute admin>
               <AdminInstallerSourcesPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/admin/entity-archives"
+          element={
+            <ProtectedRoute admin>
+              <AdminEntityArchivesPage />
             </ProtectedRoute>
           }
         />

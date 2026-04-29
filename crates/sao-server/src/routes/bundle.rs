@@ -253,6 +253,9 @@ async fn download_bundle(
         "kind": "nats_jetstream",
         "port": 4222,
     });
+    let available_llm_providers = crate::db::llm_providers::list_enabled_catalog(&state.inner.db)
+        .await
+        .map_err(|e| internal(e.to_string()))?;
 
     // Anchor-only: sao_base_url + agent_token are the minimum the entity needs to bootstrap.
     // Everything else (provider, models, policy, scopes, personality) comes from the live
@@ -263,6 +266,7 @@ async fn download_bundle(
     let config = json!({
         "sao_base_url": sao_base_url,
         "agent_id": agent.id,
+        "agent_name": agent.name.clone(),
         "agent_token": minted.jwt,
         "client_version_min": "0.1.0",
         "bus_transport": bus_transport,
@@ -271,6 +275,7 @@ async fn download_bundle(
             "default_id_model": id_model,
             "default_ego_model": ego_model,
         },
+        "available_llm_providers": available_llm_providers,
         "default_provider": provider,
         "default_id_model": id_model,
         "default_ego_model": ego_model,
@@ -280,6 +285,7 @@ async fn download_bundle(
         "schema_version": 1,
         "downloaded_from": sao_base_url,
         "agent_id": agent.id,
+        "agent_name": agent.name.clone(),
         "installer": {
             "file": "OrionII-Setup.msi",
             "launcher": "Install-OrionII.cmd",

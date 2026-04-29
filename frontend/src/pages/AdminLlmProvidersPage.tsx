@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   listLlmProviders,
@@ -11,6 +11,12 @@ import type {
   LlmProviderName,
   LlmProviderTestResult,
 } from '../types';
+import {
+  buildModelCatalog,
+  deriveManualModels,
+  normalizeModelList,
+  prepareModelSelection,
+} from './adminLlmProviderModels';
 
 interface ProviderCatalogEntry {
   name: LlmProviderName;
@@ -28,52 +34,84 @@ const CATALOG: ProviderCatalogEntry[] = [
   {
     name: 'openai',
     label: 'OpenAI',
-    blurb: 'GPT-4o family. Used by entities that need general-purpose chat or tool-use.',
+    blurb:
+      'Frontier GPT-5.x, reasoning, and GPT-4.1 family models for general chat, coding, and tool use.',
     needsKey: true,
     needsBaseUrl: false,
     keyHint: 'sk-... — create at platform.openai.com/api-keys',
     consoleUrl: 'https://platform.openai.com/api-keys',
-    presetModels: ['gpt-4o', 'gpt-4o-mini', 'gpt-4.1', 'gpt-4.1-mini'],
-    defaultModel: 'gpt-4o-mini',
+    presetModels: [
+      'gpt-5.5',
+      'gpt-5.4',
+      'gpt-5.4-mini',
+      'gpt-5.4-nano',
+      'gpt-5',
+      'gpt-5-mini',
+      'gpt-5-nano',
+      'o3',
+      'o4-mini',
+      'gpt-4.1',
+      'gpt-4.1-mini',
+      'gpt-4.1-nano',
+      'gpt-4o',
+      'gpt-4o-mini',
+    ],
+    defaultModel: 'gpt-5.4-mini',
   },
   {
     name: 'anthropic',
     label: 'Anthropic Claude',
-    blurb: 'Claude 4.x family. Strong reasoning, large context, computer-use compatible.',
+    blurb:
+      'Claude frontier and balanced text models, including Opus 4.1 and Sonnet 4 aliases.',
     needsKey: true,
     needsBaseUrl: false,
     keyHint: 'sk-ant-... — create at console.anthropic.com/settings/keys',
     consoleUrl: 'https://console.anthropic.com/settings/keys',
     presetModels: [
-      'claude-opus-4-7',
-      'claude-sonnet-4-6',
-      'claude-haiku-4-5-20251001',
+      'claude-opus-4-1',
+      'claude-opus-4-1-20250805',
+      'claude-opus-4-0',
+      'claude-sonnet-4-0',
+      'claude-sonnet-4-20250514',
+      'claude-3-7-sonnet-latest',
+      'claude-3-5-haiku-latest',
     ],
-    defaultModel: 'claude-haiku-4-5-20251001',
+    defaultModel: 'claude-sonnet-4-0',
   },
   {
     name: 'grok',
     label: 'xAI Grok',
-    blurb: 'Grok 4 family from xAI. OpenAI-compatible chat completions.',
+    blurb: 'Grok 4.20 family from xAI, including reasoning and multi-agent variants.',
     needsKey: true,
     needsBaseUrl: false,
     keyHint: 'xai-... — create at console.x.ai',
     consoleUrl: 'https://console.x.ai/',
-    presetModels: ['grok-4-latest', 'grok-4-fast', 'grok-3'],
-    defaultModel: 'grok-4-fast',
+    presetModels: [
+      'grok-4.20',
+      'grok-4.20-reasoning',
+      'grok-4.20-multi-agent',
+      'grok-4-1-fast',
+      'grok-3',
+    ],
+    defaultModel: 'grok-4.20-reasoning',
   },
   {
     name: 'gemini',
     label: 'Google Gemini',
-    blurb: 'Gemini 2.x via the Generative Language API.',
+    blurb:
+      'Gemini frontier preview and stable text models exposed through the Generative Language API.',
     needsKey: true,
     needsBaseUrl: false,
     keyHint: 'AIza... — create at aistudio.google.com/apikey',
     consoleUrl: 'https://aistudio.google.com/apikey',
     presetModels: [
+      'gemini-3-pro-preview',
+      'gemini-3-flash-preview',
       'gemini-2.5-pro',
       'gemini-2.5-flash',
+      'gemini-2.5-flash-lite',
       'gemini-2.0-flash',
+      'gemini-2.0-flash-lite',
     ],
     defaultModel: 'gemini-2.5-flash',
   },
@@ -131,41 +169,111 @@ function ProviderCard({
   row: LlmProvider | undefined;
 }) {
   const queryClient = useQueryClient();
+  const initialSelection = prepareModelSelection(
+    row?.approved_models ?? [],
+    row?.default_model,
+  );
   const [enabled, setEnabled] = useState(row?.enabled ?? false);
   const [baseUrl, setBaseUrl] = useState(row?.base_url ?? '');
-  const [defaultModel, setDefaultModel] = useState(
-    row?.default_model ?? entry.defaultModel,
-  );
+  const [defaultModel, setDefaultModel] = useState(initialSelection.defaultModel);
   const [approvedModels, setApprovedModels] = useState<string[]>(
-    row?.approved_models?.length
-      ? row.approved_models
-      : entry.needsKey || entry.needsBaseUrl
-        ? []
-        : entry.presetModels,
+    initialSelection.approvedModels,
+  );
+  const [manualModels, setManualModels] = useState<string[]>(
+    deriveManualModels(
+      entry.presetModels,
+      initialSelection.approvedModels,
+      initialSelection.defaultModel,
+    ),
   );
   const [apiKey, setApiKey] = useState('');
+  const [customModelInput, setCustomModelInput] = useState('');
   const [discovered, setDiscovered] = useState<string[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
   const [testResult, setTestResult] = useState<LlmProviderTestResult | null>(null);
 
-  useEffect(() => {
-    if (!row) return;
-    setEnabled(row.enabled);
-    setBaseUrl(row.base_url ?? '');
-    setDefaultModel(row.default_model ?? entry.defaultModel);
-    if (row.approved_models?.length) {
-      setApprovedModels(row.approved_models);
-    }
-  }, [row, entry.defaultModel]);
+  const modelCatalog = useMemo(
+    () =>
+      buildModelCatalog({
+        presetModels: entry.presetModels,
+        discoveredModels: discovered ?? [],
+        manualModels,
+        approvedModels,
+        defaultModel,
+      }),
+    [approvedModels, defaultModel, discovered, entry.presetModels, manualModels],
+  );
 
-  const togglePreset = (model: string) => {
-    setApprovedModels((current) =>
-      current.includes(model)
-        ? current.filter((m) => m !== model)
-        : [...current, model],
+  useEffect(() => {
+    const nextSelection = prepareModelSelection(
+      row?.approved_models ?? [],
+      row?.default_model,
     );
+    setEnabled(row?.enabled ?? false);
+    setBaseUrl(row?.base_url ?? '');
+    setApprovedModels(nextSelection.approvedModels);
+    setDefaultModel(nextSelection.defaultModel);
+    setManualModels(
+      deriveManualModels(
+        entry.presetModels,
+        nextSelection.approvedModels,
+        nextSelection.defaultModel,
+      ),
+    );
+  }, [entry.presetModels, row]);
+
+  const toggleApprovedModel = (model: string) => {
+    const isApproved = approvedModels.includes(model);
+    const nextApprovedModels = isApproved
+      ? approvedModels.filter((current) => current !== model)
+      : normalizeModelList([...approvedModels, model]);
+
+    setApprovedModels(nextApprovedModels);
+
+    if (isApproved && defaultModel === model) {
+      setDefaultModel(nextApprovedModels[0] ?? '');
+      return;
+    }
+
+    if (!isApproved && !defaultModel) {
+      setDefaultModel(model);
+    }
+  };
+
+  const selectDefaultModel = (model: string) => {
+    if (!approvedModels.includes(model)) {
+      setApprovedModels(normalizeModelList([...approvedModels, model]));
+    }
+    setDefaultModel(model);
+  };
+
+  const removeCustomModel = (model: string) => {
+    const nextManualModels = manualModels.filter((current) => current !== model);
+    const nextApprovedModels = approvedModels.filter((current) => current !== model);
+
+    setManualModels(nextManualModels);
+    setApprovedModels(nextApprovedModels);
+
+    if (defaultModel === model) {
+      setDefaultModel(nextApprovedModels[0] ?? '');
+    }
+  };
+
+  const addCustomModels = () => {
+    const nextCustomModels = normalizeModelList(customModelInput.split(','));
+
+    if (nextCustomModels.length === 0) {
+      return;
+    }
+
+    setManualModels((current) => normalizeModelList([...current, ...nextCustomModels]));
+    setApprovedModels((current) => normalizeModelList([...current, ...nextCustomModels]));
+    if (!defaultModel) {
+      setDefaultModel(nextCustomModels[0]);
+    }
+    setCustomModelInput('');
   };
 
   const handleProbe = async () => {
@@ -177,7 +285,7 @@ function ProviderCard({
     setBusy(true);
     try {
       const models = await probeOllamaModels(baseUrl.trim());
-      setDiscovered(models);
+      setDiscovered(normalizeModelList(models));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Probe failed');
     } finally {
@@ -189,15 +297,31 @@ function ProviderCard({
     setError('');
     setSaved(false);
     setTestResult(null);
+    const preparedSelection = prepareModelSelection(approvedModels, defaultModel);
+
+    if (enabled && preparedSelection.approvedModels.length === 0) {
+      setError(
+        'Select at least one approved model before enabling this provider.',
+      );
+      return;
+    }
+
+    if (enabled && !preparedSelection.defaultModel) {
+      setError('Choose a default model before enabling this provider.');
+      return;
+    }
+
     setBusy(true);
     try {
       await updateLlmProvider(entry.name, {
         enabled,
         base_url: entry.needsBaseUrl ? baseUrl.trim() : null,
-        approved_models: approvedModels,
-        default_model: defaultModel.trim() || null,
+        approved_models: preparedSelection.approvedModels,
+        default_model: preparedSelection.defaultModel || null,
         api_key: apiKey.trim() ? apiKey.trim() : undefined,
       });
+      setApprovedModels(preparedSelection.approvedModels);
+      setDefaultModel(preparedSelection.defaultModel);
       setApiKey('');
       setSaved(true);
       await queryClient.invalidateQueries({ queryKey: ['llm-providers'] });
@@ -214,7 +338,12 @@ function ProviderCard({
     setTestResult(null);
     setBusy(true);
     try {
-      const result = await testLlmProvider(entry.name, defaultModel.trim() || undefined);
+      const modelToTest = defaultModel.trim() || approvedModels[0]?.trim() || undefined;
+      const result = await testLlmProvider(entry.name, {
+        model: modelToTest,
+        api_key: entry.needsKey && apiKey.trim() ? apiKey.trim() : undefined,
+        base_url: entry.needsBaseUrl && baseUrl.trim() ? baseUrl.trim() : undefined,
+      });
       setTestResult(result);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Test failed');
@@ -295,75 +424,126 @@ function ProviderCard({
               </a>
             </p>
           )}
+          <p className="text-xs text-gray-500 mt-1">
+            Test connection uses the value currently typed here. Save stores it in the vault.
+          </p>
         </div>
       )}
 
-      <div>
+      <div className="rounded-xl border border-gray-700 bg-gray-900/40 p-4 space-y-4">
         <label className="block text-xs text-gray-400 mb-1">
           Approved models — entities can only use models on this list
         </label>
-        <div className="flex flex-wrap gap-2 mb-2">
-          {entry.presetModels.map((m) => (
-            <label
-              key={m}
-              className="flex items-center gap-2 px-2 py-1 bg-gray-700 rounded text-xs text-gray-200"
-            >
-              <input
-                type="checkbox"
-                checked={approvedModels.includes(m)}
-                onChange={() => togglePreset(m)}
-              />
-              <span className="font-mono">{m}</span>
-            </label>
-          ))}
+        <div className="flex flex-wrap gap-2">
+          <span className="rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300">
+            {approvedModels.length} approved
+          </span>
+          <span className="rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300">
+            Default: <span className="font-mono">{defaultModel || 'not selected'}</span>
+          </span>
+          <span className="rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300">
+            Suggested default: <span className="font-mono">{entry.defaultModel}</span>
+          </span>
+          {entry.needsBaseUrl && discovered && (
+            <span className="rounded-full bg-gray-800 px-3 py-1 text-xs text-gray-300">
+              Discovered: {discovered.length}
+            </span>
+          )}
         </div>
-        {discovered && (
-          <div className="mb-2">
-            <p className="text-xs text-gray-500 mb-1">Discovered on Ollama:</p>
-            <div className="flex flex-wrap gap-2">
-              {discovered.length === 0 && (
-                <span className="text-xs text-gray-500">Ollama returned no models</span>
-              )}
-              {discovered.map((m) => (
-                <label
-                  key={m}
-                  className="flex items-center gap-2 px-2 py-1 bg-gray-700 rounded text-xs text-gray-200"
-                >
-                  <input
-                    type="checkbox"
-                    checked={approvedModels.includes(m)}
-                    onChange={() => togglePreset(m)}
-                  />
-                  <span className="font-mono">{m}</span>
-                </label>
-              ))}
-            </div>
+
+        <div className="rounded-lg border border-gray-700 bg-gray-800/50 p-3">
+          <label className="block text-xs text-gray-400 mb-2">Add custom models</label>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={customModelInput}
+              onChange={(e) => setCustomModelInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  addCustomModels();
+                }
+              }}
+              placeholder="comma-separated fine-tunes, dated revisions, or local tags"
+              className="flex-1 px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 text-sm font-mono"
+            />
+            <button
+              onClick={addCustomModels}
+              disabled={busy || !customModelInput.trim()}
+              className="px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-500 text-white text-sm rounded-lg"
+            >
+              Add
+            </button>
+          </div>
+          <p className="mt-2 text-xs text-gray-500">
+            Approve multiple models per provider, then mark one of the approved models as
+            the default for tests and new agent defaults.
+          </p>
+        </div>
+
+        {modelCatalog.allModels.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-gray-700 p-4 text-sm text-gray-500">
+            No models are listed yet. Add custom models or, for Ollama, probe the endpoint to
+            discover them.
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {modelCatalog.presetModels.length > 0 && (
+              <ModelSection
+                providerName={entry.name}
+                heading="Provider catalog"
+                caption="Curated frontier and production-ready models for this provider"
+                models={modelCatalog.presetModels}
+                approvedModels={approvedModels}
+                defaultModel={defaultModel}
+                suggestedDefault={entry.defaultModel}
+                onToggleApproved={toggleApprovedModel}
+                onSelectDefault={selectDefaultModel}
+              />
+            )}
+            {modelCatalog.discoveredModels.length > 0 && (
+              <ModelSection
+                providerName={entry.name}
+                heading="Discovered models"
+                caption="Returned by the provider endpoint right now"
+                models={modelCatalog.discoveredModels}
+                approvedModels={approvedModels}
+                defaultModel={defaultModel}
+                suggestedDefault={entry.defaultModel}
+                onToggleApproved={toggleApprovedModel}
+                onSelectDefault={selectDefaultModel}
+              />
+            )}
+            {modelCatalog.customModels.length > 0 && (
+              <ModelSection
+                providerName={entry.name}
+                heading="Custom models"
+                caption="Manual additions such as fine-tunes, dated revisions, or local tags"
+                models={modelCatalog.customModels}
+                approvedModels={approvedModels}
+                defaultModel={defaultModel}
+                suggestedDefault={entry.defaultModel}
+                onToggleApproved={toggleApprovedModel}
+                onSelectDefault={selectDefaultModel}
+                onRemoveModel={removeCustomModel}
+              />
+            )}
           </div>
         )}
-        <input
-          type="text"
-          value={approvedModels.join(', ')}
-          onChange={(e) =>
-            setApprovedModels(
-              e.target.value
-                .split(',')
-                .map((s) => s.trim())
-                .filter(Boolean),
-            )
-          }
-          placeholder="comma-separated override (e.g., custom fine-tunes)"
-          className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 text-xs font-mono"
-        />
-      </div>
 
-      <div>
-        <label className="block text-xs text-gray-400 mb-1">Default model</label>
-        <input
-          type="text"
-          value={defaultModel}
-          onChange={(e) => setDefaultModel(e.target.value)}
-          className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 font-mono"
-        />
+        {approvedModels.length === 0 && (
+          <div className="rounded-lg border border-yellow-800 bg-yellow-900/20 p-3 text-xs text-yellow-100">
+            No approved models are selected yet. Enabled providers must have at least one approved
+            model.
+          </div>
+        )}
+
+        {approvedModels.length > 0 && !defaultModel && (
+          <div className="rounded-lg border border-blue-800 bg-blue-900/20 p-3 text-xs text-blue-100">
+            Choose one approved model as the default to make connection tests and new agent
+            defaults more predictable.
+          </div>
+        )}
       </div>
 
       {error && (
@@ -420,6 +600,118 @@ function ProviderCard({
         >
           {busy ? 'Saving...' : 'Save'}
         </button>
+      </div>
+    </div>
+  );
+}
+
+function ModelSection({
+  providerName,
+  heading,
+  caption,
+  models,
+  approvedModels,
+  defaultModel,
+  suggestedDefault,
+  onToggleApproved,
+  onSelectDefault,
+  onRemoveModel,
+}: {
+  providerName: string;
+  heading: string;
+  caption: string;
+  models: string[];
+  approvedModels: string[];
+  defaultModel: string;
+  suggestedDefault: string;
+  onToggleApproved: (model: string) => void;
+  onSelectDefault: (model: string) => void;
+  onRemoveModel?: (model: string) => void;
+}) {
+  return (
+    <div>
+      <div className="mb-2">
+        <p className="text-sm font-medium text-white">{heading}</p>
+        <p className="text-xs text-gray-500">{caption}</p>
+      </div>
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        {models.map((model) => {
+          const isApproved = approvedModels.includes(model);
+          const isDefault = defaultModel === model;
+          const isSuggestedDefault = suggestedDefault === model;
+
+          return (
+            <div
+              key={model}
+              className={`rounded-lg border p-3 ${
+                isApproved
+                  ? 'border-blue-700 bg-blue-900/10'
+                  : 'border-gray-700 bg-gray-800/60'
+              }`}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="font-mono text-sm text-white break-all">{model}</div>
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {isDefault && (
+                      <span className="rounded-full bg-blue-500/20 px-2 py-0.5 text-[11px] text-blue-200">
+                        Default
+                      </span>
+                    )}
+                    {isSuggestedDefault && !isDefault && (
+                      <span className="rounded-full bg-gray-700 px-2 py-0.5 text-[11px] text-gray-300">
+                        Suggested
+                      </span>
+                    )}
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-[11px] ${
+                        isApproved
+                          ? 'bg-green-500/20 text-green-200'
+                          : 'bg-gray-700 text-gray-400'
+                      }`}
+                    >
+                      {isApproved ? 'Approved' : 'Not approved'}
+                    </span>
+                  </div>
+                </div>
+                {onRemoveModel && (
+                  <button
+                    onClick={() => onRemoveModel(model)}
+                    className="text-xs text-gray-400 hover:text-red-300"
+                    title="Remove custom model"
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
+
+              <div className="mt-4 flex flex-wrap gap-4">
+                <label className="flex items-center gap-2 text-xs text-gray-200">
+                  <input
+                    type="checkbox"
+                    checked={isApproved}
+                    onChange={() => onToggleApproved(model)}
+                  />
+                  Approved
+                </label>
+                <label
+                  className={`flex items-center gap-2 text-xs ${
+                    isApproved ? 'text-gray-200' : 'text-gray-500'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name={`${providerName}-default-model`}
+                    checked={isDefault}
+                    disabled={!isApproved}
+                    onChange={() => onSelectDefault(model)}
+                  />
+                  Default
+                </label>
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

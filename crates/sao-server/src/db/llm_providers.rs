@@ -15,6 +15,25 @@ pub struct LlmProviderSettingsRow {
     pub updated_by: Option<Uuid>,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LlmProviderCatalogEntry {
+    pub provider: String,
+    pub approved_models: Vec<String>,
+    pub default_model: Option<String>,
+}
+
+fn normalize_models(value: &serde_json::Value) -> Vec<String> {
+    serde_json::from_value::<Vec<String>>(value.clone()).unwrap_or_default()
+}
+
+pub fn to_catalog_entry(row: &LlmProviderSettingsRow) -> LlmProviderCatalogEntry {
+    LlmProviderCatalogEntry {
+        provider: row.provider.clone(),
+        approved_models: normalize_models(&row.approved_models),
+        default_model: row.default_model.clone(),
+    }
+}
+
 pub async fn list(pool: &PgPool) -> Result<Vec<LlmProviderSettingsRow>, sqlx::Error> {
     sqlx::query_as::<_, LlmProviderSettingsRow>(
         "SELECT provider, enabled, base_url, approved_models, default_model, updated_at, updated_by \
@@ -35,6 +54,27 @@ pub async fn get(
     .bind(provider)
     .fetch_optional(pool)
     .await
+}
+
+pub async fn list_enabled_catalog(
+    pool: &PgPool,
+) -> Result<Vec<LlmProviderCatalogEntry>, sqlx::Error> {
+    let rows = list(pool).await?;
+    Ok(rows
+        .into_iter()
+        .filter(|row| row.enabled)
+        .map(|row| to_catalog_entry(&row))
+        .collect())
+}
+
+pub async fn get_enabled_catalog_entry(
+    pool: &PgPool,
+    provider: &str,
+) -> Result<Option<LlmProviderCatalogEntry>, sqlx::Error> {
+    let row = get(pool, provider).await?;
+    Ok(row
+        .filter(|value| value.enabled)
+        .map(|value| to_catalog_entry(&value)))
 }
 
 pub async fn upsert(

@@ -131,7 +131,7 @@ The ZIP contains:
 
 | File | Purpose |
 |---|---|
-| `config.json` | SAO base URL + entity JWT (the anchor), plus `bus_transport` requesting OrionII's bundled NATS JetStream entity bus. Fallback model fields are kept for offline mode + back-compat. |
+| `config.json` | SAO base URL + agent id/name + entity JWT (the anchor), plus `bus_transport` requesting OrionII's bundled NATS JetStream entity bus. Fallback model fields are kept for offline mode + back-compat. |
 | `deployment.json` | Non-secret manifest showing the SAO origin the bundle was downloaded from, installer file, HTTP seam, and bus intent. |
 | `OrionII-Setup.msi` | Tauri installer for Windows. |
 | `Install-OrionII.cmd` | Double-click launcher that writes `config.json`, runs the MSI, and starts OrionII. |

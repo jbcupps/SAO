@@ -32,6 +32,9 @@ fn admin_routes_use_oidc_provider_namespace() {
     let src = include_str!("../src/routes/admin.rs");
     assert!(src.contains("/api/admin/oidc/providers"));
     assert!(src.contains("/api/admin/oidc/providers/:id"));
+    assert!(src.contains("/api/admin/users/:id/role"));
+    assert!(src.contains("/api/admin/entity-archives"));
+    assert!(src.contains("Cannot demote the last administrator"));
 }
 
 #[test]
@@ -105,6 +108,7 @@ fn bundle_birth_and_llm_routes_define_entity_contracts() {
     assert!(bundle_src.contains("/api/agents/:id/bundle"));
     assert!(bundle_src.contains("\"sao_base_url\""));
     assert!(bundle_src.contains("\"agent_token\""));
+    assert!(bundle_src.contains("\"agent_name\""));
     assert!(bundle_src.contains("\"bus_transport\""));
     assert!(bundle_src.contains("\"nats_jetstream\""));
     assert!(bundle_src.contains("deployment.json"));
@@ -115,15 +119,20 @@ fn bundle_birth_and_llm_routes_define_entity_contracts() {
     assert!(bundle_src.contains("public_base_url(&headers)"));
     assert!(bundle_src.contains("x-forwarded-host"));
     assert!(bundle_src.contains("GET /api/orion/birth"));
+    assert!(bundle_src.contains("\"available_llm_providers\""));
     assert!(bundle_src.contains("SAO does not participate in OrionII's internal bus"));
 
     assert!(orion_src.contains("/api/orion/birth"));
     assert!(orion_src.contains("OrionBirthResponse"));
     assert!(orion_src.contains("\"llm:generate\""));
+    assert!(orion_src.contains("available_llm_providers"));
+    assert!(orion_src.contains("birth_status"));
 
+    assert!(llm_src.contains("/api/llm/providers"));
     assert!(llm_src.contains("/api/llm/generate"));
     assert!(llm_src.contains("EntityCaller"));
     assert!(llm_src.contains("validate_entity_token"));
+    assert!(llm_src.contains("NoApprovedModels"));
 }
 
 #[test]

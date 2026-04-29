@@ -60,9 +60,30 @@ impl FromRequestParts<AppState> for AuthUser {
             )
         })?;
 
+        let user = crate::db::users::get_user_by_id(&state.inner.db, user_id)
+            .await
+            .map_err(|error| {
+                tracing::warn!(
+                    user_id = %user_id,
+                    error = %error,
+                    "Failed to load current user role"
+                );
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": "Failed to load current user" })),
+                )
+            })?
+            .ok_or_else(|| {
+                log_auth_failure(parts, "Session user no longer exists");
+                (
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({ "error": "Session user no longer exists" })),
+                )
+            })?;
+
         Ok(AuthUser {
             user_id,
-            role: claims.role,
+            role: user.role,
         })
     }
 }

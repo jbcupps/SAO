@@ -26,9 +26,17 @@ export interface Agent {
   capabilities: string[];
   created_at: string;
   updated_at: string;
+  birth_status?: 'pending' | 'ready' | 'failed' | 'archived';
+  birthed_at?: string | null;
   default_provider?: string | null;
   default_id_model?: string | null;
   default_ego_model?: string | null;
+}
+
+export interface AgentLlmProviderOption {
+  provider: LlmProviderName;
+  approved_models: string[];
+  default_model: string | null;
 }
 
 export type LlmProviderName =
@@ -104,6 +112,10 @@ export interface AgentEgressEvent {
 
 export interface AgentBirthResponse {
   status: 'READY';
+  agent_id: string;
+  identity_agent_id?: string;
+  birth_status?: 'pending' | 'ready' | 'failed' | 'archived';
+  birthed_at?: string | null;
   documents: string[];
   soul_immutable: boolean;
   personality_preview?: string;
@@ -113,12 +125,15 @@ export interface AgentBirthResponse {
 export interface AgentStatusResponse {
   agent_id: string;
   status: 'READY';
+  birth_status?: 'pending' | 'ready' | 'failed' | 'archived';
+  birthed_at?: string | null;
   documents: string[];
   soul_immutable: boolean;
   personality_preview?: string;
   default_provider?: string | null;
   default_id_model?: string | null;
   default_ego_model?: string | null;
+  available_llm_providers?: AgentLlmProviderOption[];
   last_heartbeat?: string | null;
 }
 
@@ -143,6 +158,20 @@ export interface AuditLogEntry {
   details: unknown;
   ip_address: string | null;
   user_agent: string | null;
+  created_at: string;
+}
+
+export interface EntityArchive {
+  id: string;
+  agent_id: string;
+  agent_name: string;
+  owner_user_id: string | null;
+  created_by: string | null;
+  reason: string | null;
+  archive_path: string;
+  manifest: unknown;
+  egress_event_count: number;
+  memory_event_count: number;
   created_at: string;
 }
 

@@ -18,9 +18,11 @@ pub struct AgentRow {
     pub installer_sha256: Option<String>,
     pub installer_filename: Option<String>,
     pub installer_version: Option<String>,
+    pub birth_status: String,
+    pub birthed_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-const SELECT_COLS: &str = "owner_user_id, id, name, public_key, state, capabilities, created_at, updated_at, default_provider, default_id_model, default_ego_model, installer_sha256, installer_filename, installer_version";
+const SELECT_COLS: &str = "owner_user_id, id, name, public_key, state, capabilities, created_at, updated_at, default_provider, default_id_model, default_ego_model, installer_sha256, installer_filename, installer_version, birth_status, birthed_at";
 
 pub async fn set_installer_pin(
     pool: &PgPool,
@@ -64,6 +66,7 @@ pub async fn list_agents(
 
 pub async fn create_agent(
     pool: &PgPool,
+    id: Uuid,
     owner_user_id: Uuid,
     name: &str,
     default_provider: Option<&str>,
@@ -71,9 +74,10 @@ pub async fn create_agent(
     default_ego_model: Option<&str>,
 ) -> Result<AgentRow, sqlx::Error> {
     sqlx::query_as::<_, AgentRow>(&format!(
-        "INSERT INTO agents (owner_user_id, name, default_provider, default_id_model, default_ego_model) \
-         VALUES ($1, $2, $3, $4, $5) RETURNING {SELECT_COLS}"
+        "INSERT INTO agents (id, owner_user_id, name, default_provider, default_id_model, default_ego_model, birth_status, birthed_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, 'ready', now()) RETURNING {SELECT_COLS}"
     ))
+    .bind(id)
     .bind(owner_user_id)
     .bind(name)
     .bind(default_provider)
@@ -88,6 +92,25 @@ pub async fn get_agent(pool: &PgPool, id: Uuid) -> Result<Option<AgentRow>, sqlx
         .bind(id)
         .fetch_optional(pool)
         .await
+}
+
+pub async fn update_agent_llm_defaults(
+    pool: &PgPool,
+    id: Uuid,
+    default_provider: Option<&str>,
+    default_id_model: Option<&str>,
+    default_ego_model: Option<&str>,
+) -> Result<Option<AgentRow>, sqlx::Error> {
+    sqlx::query_as::<_, AgentRow>(&format!(
+        "UPDATE agents SET default_provider = $2, default_id_model = $3, default_ego_model = $4, updated_at = now() \
+         WHERE id = $1 RETURNING {SELECT_COLS}"
+    ))
+    .bind(id)
+    .bind(default_provider)
+    .bind(default_id_model)
+    .bind(default_ego_model)
+    .fetch_optional(pool)
+    .await
 }
 
 pub async fn last_egress_at(

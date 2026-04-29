@@ -51,6 +51,9 @@ export default function AdminUsersPage() {
   return (
     <div>
       <h1 className="text-2xl font-bold text-white mb-6">User Management</h1>
+      <p className="mb-4 text-sm text-gray-400">
+        Role changes take effect on the next request, including active sessions.
+      </p>
 
       {error && (
         <div className="p-3 mb-4 bg-red-900/30 border border-red-800 rounded-lg">
@@ -100,7 +103,7 @@ export default function AdminUsersPage() {
                               e.target.value as 'user' | 'admin',
                             )
                           }
-                          disabled={isSelf || updatingId === user.id}
+                          disabled={updatingId === user.id}
                           className="px-2 py-1 text-xs bg-gray-700 border border-gray-600 rounded text-gray-300 focus:outline-none focus:border-blue-500 disabled:opacity-50"
                         >
                           <option value="user">User</option>

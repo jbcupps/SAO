@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::{GenerateRequest, LlmError};
+use super::{describe_transport_error, GenerateRequest, LlmError};
 
 #[derive(Serialize)]
 struct ChatRequest<'a> {
@@ -61,13 +61,13 @@ pub async fn generate(api_key: &str, req: &GenerateRequest) -> Result<String, Ll
         .json(&body)
         .send()
         .await
-        .map_err(|e| LlmError::Http(e.to_string()))?;
+        .map_err(|e| LlmError::Http(describe_transport_error("OpenAI Chat Completions API", &e)))?;
 
     let status = resp.status();
     let text = resp
         .text()
         .await
-        .map_err(|e| LlmError::Http(e.to_string()))?;
+        .map_err(|e| LlmError::Http(describe_transport_error("OpenAI Chat Completions API", &e)))?;
 
     if !status.is_success() {
         return Err(LlmError::ProviderError {

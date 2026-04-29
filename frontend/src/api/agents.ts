@@ -13,6 +13,12 @@ export interface CreateAgentInput {
   default_ego_model?: string;
 }
 
+export interface UpdateAgentInput {
+  default_provider?: string;
+  default_id_model?: string;
+  default_ego_model?: string;
+}
+
 export async function listAgents(): Promise<Agent[]> {
   const response = await apiRequest<{ agents: Agent[] }>('/api/agents');
   return response.agents;
@@ -29,6 +35,16 @@ export async function createAgent(
 
 export async function getAgent(id: string): Promise<AgentStatusResponse> {
   return apiRequest<AgentStatusResponse>(`/api/agents/${id}`);
+}
+
+export async function updateAgent(
+  id: string,
+  input: UpdateAgentInput,
+): Promise<AgentStatusResponse> {
+  return apiRequest<AgentStatusResponse>(`/api/agents/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  });
 }
 
 export async function deleteAgent(id: string): Promise<void> {

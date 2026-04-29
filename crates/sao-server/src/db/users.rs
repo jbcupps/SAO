@@ -86,6 +86,13 @@ pub async fn update_user_role(pool: &PgPool, id: Uuid, role: &str) -> Result<boo
     Ok(result.rows_affected() > 0)
 }
 
+pub async fn admin_count(pool: &PgPool) -> Result<i64, sqlx::Error> {
+    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users WHERE role = 'admin'")
+        .fetch_one(pool)
+        .await?;
+    Ok(count.0)
+}
+
 pub async fn delete_user(pool: &PgPool, id: Uuid) -> Result<bool, sqlx::Error> {
     let result = sqlx::query("DELETE FROM users WHERE id = $1")
         .bind(id)

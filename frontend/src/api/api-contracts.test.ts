@@ -1,12 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   listUsers,
+  listEntityArchives,
   listOidcProviders,
   queryAuditLog,
 } from './admin';
 import { listSecrets } from './vault';
 import { getMe, webauthnLoginStart } from './auth';
-import { deleteAgent } from './agents';
+import { deleteAgent, updateAgent } from './agents';
+import { listAvailableLlmProviders } from './llm-providers';
 
 type MockResponse = {
   ok: boolean;
@@ -168,6 +170,72 @@ describe('frontend api contract adapters', () => {
       '/api/agents/agent-1/delete',
       expect.objectContaining({
         method: 'POST',
+        credentials: 'include',
+        headers: expect.objectContaining({
+          'X-CSRF-Token': 'test-csrf-token',
+        }),
+      }),
+    );
+  });
+
+  it('unwraps entity archive envelope', async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({ archives: [{ id: 'ar1', agent_name: 'PseudoJames' }] }),
+    );
+
+    const archives = await listEntityArchives();
+    expect(archives).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/admin/entity-archives',
+      expect.objectContaining({
+        headers: expect.any(Object),
+        credentials: 'include',
+      }),
+    );
+  });
+
+  it('lists authenticated LLM provider options from the non-admin catalog route', async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        providers: [{ provider: 'openai', approved_models: ['gpt-4o-mini'], default_model: 'gpt-4o-mini' }],
+      }),
+    );
+
+    const providers = await listAvailableLlmProviders();
+
+    expect(providers).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/llm/providers',
+      expect.objectContaining({
+        headers: expect.any(Object),
+        credentials: 'include',
+      }),
+    );
+  });
+
+  it('updates agent LLM defaults on the agent detail route', async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        agent_id: 'agent-1',
+        status: 'READY',
+        documents: [],
+        soul_immutable: true,
+        default_provider: 'openai',
+        default_id_model: 'gpt-4o-mini',
+        default_ego_model: 'gpt-4o',
+      }),
+    );
+
+    await updateAgent('agent-1', {
+      default_provider: 'openai',
+      default_id_model: 'gpt-4o-mini',
+      default_ego_model: 'gpt-4o',
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/agents/agent-1',
+      expect.objectContaining({
+        method: 'PUT',
         credentials: 'include',
         headers: expect.objectContaining({
           'X-CSRF-Token': 'test-csrf-token',

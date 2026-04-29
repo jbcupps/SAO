@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::{GenerateRequest, LlmError};
+use super::{describe_transport_error, GenerateRequest, LlmError};
 
 #[derive(Serialize)]
 struct OllamaGenerateBody<'a> {
@@ -39,13 +39,13 @@ pub async fn generate(base_url: &str, req: &GenerateRequest) -> Result<String, L
         .json(&body)
         .send()
         .await
-        .map_err(|e| LlmError::Http(e.to_string()))?;
+        .map_err(|e| LlmError::Http(describe_transport_error("Ollama generate endpoint", &e)))?;
 
     let status = resp.status();
     let text = resp
         .text()
         .await
-        .map_err(|e| LlmError::Http(e.to_string()))?;
+        .map_err(|e| LlmError::Http(describe_transport_error("Ollama generate endpoint", &e)))?;
 
     if !status.is_success() {
         return Err(LlmError::ProviderError {
@@ -82,12 +82,12 @@ pub async fn list_models(base_url: &str) -> Result<Vec<String>, LlmError> {
         .get(&url)
         .send()
         .await
-        .map_err(|e| LlmError::Http(e.to_string()))?;
+        .map_err(|e| LlmError::Http(describe_transport_error("Ollama tags endpoint", &e)))?;
     let status = resp.status();
     let text = resp
         .text()
         .await
-        .map_err(|e| LlmError::Http(e.to_string()))?;
+        .map_err(|e| LlmError::Http(describe_transport_error("Ollama tags endpoint", &e)))?;
     if !status.is_success() {
         return Err(LlmError::ProviderError {
             status: status.as_u16(),

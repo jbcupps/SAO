@@ -3,6 +3,7 @@
 //! revocation of an entity token instantly cuts off model access.
 
 use serde::{Deserialize, Serialize};
+use std::error::Error as StdError;
 use thiserror::Error;
 
 use crate::state::AppState;
@@ -44,6 +45,8 @@ pub enum LlmError {
     ProviderDisabled(String),
     #[error("provider {0} is not configured (missing base_url or api key)")]
     ProviderUnconfigured(String),
+    #[error("provider {0} has no approved models configured")]
+    NoApprovedModels(String),
     #[error("model {model} is not on the approved list for {provider}")]
     ModelNotApproved { provider: String, model: String },
     #[error("vault is sealed; cannot read provider key")]
@@ -56,6 +59,38 @@ pub enum LlmError {
     Database(#[from] sqlx::Error),
     #[error("provider returned error status {status}: {body}")]
     ProviderError { status: u16, body: String },
+}
+
+pub fn describe_transport_error(target: &str, err: &reqwest::Error) -> String {
+    let mut chain: Vec<String> = Vec::new();
+    let mut current: Option<&(dyn StdError + 'static)> = Some(err);
+
+    while let Some(source) = current {
+        let message = source.to_string();
+        if !message.trim().is_empty() && !chain.iter().any(|entry| entry == &message) {
+            chain.push(message);
+        }
+        current = source.source();
+    }
+
+    let detail = if chain.is_empty() {
+        err.to_string()
+    } else {
+        chain.join(": ")
+    };
+    let lower = detail.to_ascii_lowercase();
+
+    if err.is_timeout() {
+        return format!("timeout while calling {target}: {detail}");
+    }
+
+    if err.is_connect() || lower.contains("ssl") || lower.contains("tls") {
+        return format!(
+            "HTTPS connection to {target} failed. This usually means a TLS handshake or network-path problem between SAO and the provider, not a bad model selection. Details: {detail}"
+        );
+    }
+
+    format!("transport error while calling {target}: {detail}")
 }
 
 pub async fn dispatch(
@@ -72,7 +107,11 @@ pub async fn dispatch(
 
     let approved: Vec<String> =
         serde_json::from_value(settings.approved_models.clone()).unwrap_or_default();
-    if !approved.is_empty() && !approved.iter().any(|m| m == &req.model) {
+    if approved.is_empty() {
+        return Err(LlmError::NoApprovedModels(req.provider.clone()));
+    }
+
+    if !approved.iter().any(|m| m == &req.model) {
         return Err(LlmError::ModelNotApproved {
             provider: req.provider.clone(),
             model: req.model.clone(),

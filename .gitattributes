@@ -1,0 +1,12 @@
+* text=auto eol=lf
+
+# Explicit line ending rules
+*.sql text eol=lf
+*.rs text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+Cargo.* text eol=lf
+*.ps1 text eol=crlf

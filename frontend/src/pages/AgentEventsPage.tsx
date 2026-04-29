@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
-import { getAgent, listAgentEvents } from '../api/agents';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { getAgent, listAgentEvents, updateAgent } from '../api/agents';
+import { AgentLlmFields, buildAgentLlmSelection } from '../components/AgentLlmFields';
 
 const PAGE_SIZE = 25;
 
@@ -21,7 +22,16 @@ function eventColor(type: string): string {
 export default function AgentEventsPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [offset, setOffset] = useState(0);
+  const [selection, setSelection] = useState({
+    default_provider: '',
+    default_id_model: '',
+    default_ego_model: '',
+  });
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
+  const [saved, setSaved] = useState(false);
 
   const { data: agent } = useQuery({
     queryKey: ['agent', id],
@@ -36,7 +46,43 @@ export default function AgentEventsPage() {
     refetchInterval: 5000,
   });
 
+  useEffect(() => {
+    if (!agent?.available_llm_providers || agent.available_llm_providers.length === 0) {
+      return;
+    }
+
+    setSelection(
+      buildAgentLlmSelection(
+        agent.available_llm_providers,
+        agent.default_provider ?? '',
+        agent.default_id_model ?? '',
+        agent.default_ego_model ?? '',
+      ),
+    );
+  }, [
+    agent?.available_llm_providers,
+    agent?.default_ego_model,
+    agent?.default_id_model,
+    agent?.default_provider,
+  ]);
+
   if (!id) return null;
+
+  const handleSave = async () => {
+    setSaveError('');
+    setSaved(false);
+    setSaving(true);
+    try {
+      const updated = await updateAgent(id, selection);
+      queryClient.setQueryData(['agent', id], updated);
+      queryClient.invalidateQueries({ queryKey: ['agents'] });
+      setSaved(true);
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'Failed to update LLM defaults');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <div>
@@ -59,12 +105,69 @@ export default function AgentEventsPage() {
         </div>
       </div>
 
+      <div className="mb-6 rounded-xl border border-gray-700 bg-gray-800 p-5">
+        <div className="mb-3">
+          <h2 className="text-lg font-semibold text-white">Runtime LLM Selection</h2>
+          <p className="text-xs text-gray-500 mt-1">
+            Switch the agent to any enabled provider and approved model combination that SAO
+            currently exposes.
+          </p>
+        </div>
+
+        <AgentLlmFields
+          providers={agent?.available_llm_providers ?? []}
+          provider={selection.default_provider}
+          idModel={selection.default_id_model}
+          egoModel={selection.default_ego_model}
+          disabled={saving}
+          onChange={setSelection}
+        />
+
+        {saveError && (
+          <div className="mt-3 rounded border border-red-800 bg-red-900/30 p-2 text-xs text-red-300">
+            {saveError}
+          </div>
+        )}
+        {saved && <div className="mt-3 text-xs text-green-400">LLM defaults updated.</div>}
+
+        <div className="mt-4 flex gap-2">
+          <button
+            onClick={handleSave}
+            disabled={saving || !(agent?.available_llm_providers?.length)}
+            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-900 text-white text-sm rounded-lg"
+          >
+            {saving ? 'Saving...' : 'Save LLM defaults'}
+          </button>
+          <button
+            onClick={() => {
+              if (!agent?.available_llm_providers) {
+                return;
+              }
+              setSelection(
+                buildAgentLlmSelection(
+                  agent.available_llm_providers,
+                  agent.default_provider ?? '',
+                  agent.default_id_model ?? '',
+                  agent.default_ego_model ?? '',
+                ),
+              );
+              setSaved(false);
+              setSaveError('');
+            }}
+            disabled={saving}
+            className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 text-sm rounded-lg"
+          >
+            Reset
+          </button>
+        </div>
+      </div>
+
       {isLoading ? (
         <div className="text-gray-400">Loading...</div>
       ) : (events ?? []).length === 0 ? (
         <div className="text-center py-16 text-gray-500">
-          No egress events yet. Once the entity is installed and chats with
-          you, audit / memory / identitySync events will appear here.
+          No egress events yet. Once the entity is installed and chats with you, audit /
+          memory / identitySync events will appear here.
         </div>
       ) : (
         <div className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
@@ -86,9 +189,7 @@ export default function AgentEventsPage() {
                   <td className="px-4 py-2 text-gray-300 whitespace-nowrap">
                     {new Date(e.created_at).toLocaleString()}
                   </td>
-                  <td
-                    className={`px-4 py-2 font-mono ${eventColor(e.event_type)}`}
-                  >
+                  <td className={`px-4 py-2 font-mono ${eventColor(e.event_type)}`}>
                     {e.event_type}
                   </td>
                   <td className="px-4 py-2 font-mono text-xs text-gray-400">

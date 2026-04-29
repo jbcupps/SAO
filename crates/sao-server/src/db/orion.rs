@@ -35,6 +35,21 @@ pub async fn list_for_agent(
     .await
 }
 
+pub async fn list_all_for_agent(
+    pool: &PgPool,
+    agent_id: Uuid,
+) -> Result<Vec<EgressEventRow>, sqlx::Error> {
+    sqlx::query_as::<_, EgressEventRow>(
+        "SELECT event_id, user_id, agent_id, orion_id, event_type, payload, enqueued_at, attempts, created_at \
+         FROM orion_egress_events \
+         WHERE agent_id = $1 \
+         ORDER BY created_at ASC",
+    )
+    .bind(agent_id)
+    .fetch_all(pool)
+    .await
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn insert_egress_event_if_new(
     pool: &PgPool,

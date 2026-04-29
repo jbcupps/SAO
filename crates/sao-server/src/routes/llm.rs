@@ -1,22 +1,39 @@
+//! GET /api/llm/providers — authenticated catalog of enabled provider/model choices.
 //! POST /api/llm/generate — entity-token-authenticated proxy to a configured LLM provider.
 
 use axum::{
     async_trait,
     extract::{FromRequestParts, State},
     http::{header::AUTHORIZATION, request::Parts, StatusCode},
-    routing::post,
+    routing::{get, post},
     Json, Router,
 };
 use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::auth::agent_tokens;
+use crate::auth::middleware::AuthUser;
 use crate::llm::{self, GenerateRequest};
 use crate::security::RequestAuditContext;
 use crate::state::AppState;
 
 pub fn routes() -> Router<AppState> {
-    Router::new().route("/api/llm/generate", post(generate_handler))
+    Router::new()
+        .route("/api/llm/providers", get(list_available_providers))
+        .route("/api/llm/generate", post(generate_handler))
+}
+
+async fn list_available_providers(
+    _user: AuthUser,
+    State(state): State<AppState>,
+) -> (StatusCode, Json<Value>) {
+    match crate::db::llm_providers::list_enabled_catalog(&state.inner.db).await {
+        Ok(providers) => (StatusCode::OK, Json(json!({ "providers": providers }))),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        ),
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -115,6 +132,7 @@ async fn generate_handler(
             let status = match &e {
                 llm::LlmError::ProviderDisabled(_)
                 | llm::LlmError::ProviderUnconfigured(_)
+                | llm::LlmError::NoApprovedModels(_)
                 | llm::LlmError::ModelNotApproved { .. } => StatusCode::BAD_REQUEST,
                 llm::LlmError::VaultSealed => StatusCode::SERVICE_UNAVAILABLE,
                 llm::LlmError::ProviderError { .. }
