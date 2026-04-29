@@ -14,8 +14,8 @@ What this runbook proves:
 - The bundle still carries a valid entity JWT.
 - The entity JWT still works on `GET /api/orion/birth`,
   `POST /api/llm/generate`, and `POST /api/orion/egress`.
-- SAO still persists egress, updates `last_heartbeat`, and records the
-  expected audit evidence.
+- SAO still persists egress, updates `last_seen_at` (and the derived
+  `presence` flag), and records the expected audit evidence.
 
 What this runbook does not prove on its own:
 
@@ -117,7 +117,7 @@ Required evidence:
 - `llm.generate` audit row exists and `llm.generate.failed` does not.
 - `/agents/:id/events` shows `identitySync` and at least one post-chat
   event such as `auditAction` or `memoryEvent`.
-- `/api/agents/:id` shows a fresh `last_heartbeat`.
+- `/api/agents/:id` shows a fresh `last_seen_at` and `presence: "online"`.
 
 ## Automated SAO-Side Contract Exercise
 

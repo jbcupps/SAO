@@ -565,7 +565,8 @@ try {
     $events = Wait-ForAgentEvents -AgentId $agentId -Headers $adminHeaders -RequiredTypes @("identitySync", "auditAction")
     $agentStatus = Invoke-JsonRequest -Method Get -Uri "$BaseUrl/api/agents/$agentId" -Headers $adminHeaders
     Assert-Condition ($agentStatus.StatusCode -eq 200) "Expected /api/agents/$agentId to return 200."
-    Assert-Condition (-not [string]::IsNullOrWhiteSpace($agentStatus.JsonBody.last_heartbeat)) "Expected last_heartbeat after egress."
+    Assert-Condition (-not [string]::IsNullOrWhiteSpace($agentStatus.JsonBody.last_seen_at)) "Expected last_seen_at after egress."
+    Assert-Condition ($agentStatus.JsonBody.presence -eq 'online') "Expected presence=online immediately after egress."
 
     $auditEntries = Wait-ForAuditEntries -AgentId $agentId -Headers $adminHeaders -RequiredActions @(
         "agents.bundle_downloaded",
@@ -581,7 +582,8 @@ try {
         accepted      = $egress.JsonBody.accepted
         duplicate     = $egress.JsonBody.duplicate
         event_types   = @($events | ForEach-Object { $_.event_type } | Select-Object -Unique)
-        last_heartbeat = $agentStatus.JsonBody.last_heartbeat
+        last_seen_at  = $agentStatus.JsonBody.last_seen_at
+        presence      = $agentStatus.JsonBody.presence
     }
     $happyPath.audit = [ordered]@{
         bundle_downloaded = Get-AuditActionCount -Entries $auditEntries -Action "agents.bundle_downloaded"

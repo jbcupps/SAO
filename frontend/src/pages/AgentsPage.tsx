@@ -10,9 +10,11 @@ import {
 import { listAvailableLlmProviders } from '../api/llm-providers';
 import { AgentLlmFields, buildAgentLlmSelection } from '../components/AgentLlmFields';
 import { listAgents } from '../api/agents';
+import { formatRelativeTime } from '../lib/time-format';
 import type {
   Agent,
   AgentLlmProviderOption,
+  AgentPresence,
   AgentStatusResponse,
 } from '../types';
 
@@ -39,6 +41,9 @@ export default function AgentsPage() {
   const { data: agents, isLoading } = useQuery({
     queryKey: ['agents'],
     queryFn: listAgents,
+    // Re-poll every 30s so the presence dot reflects recent egress activity
+    // without forcing the operator to manually refresh the page.
+    refetchInterval: 30_000,
   });
 
   const { data: providers, isLoading: providersLoading } = useQuery({
@@ -138,20 +143,8 @@ export default function AgentsPage() {
     queryClient.setQueryData(['agent', agentId], updated);
   };
 
-  const stateColor = (state: string) => {
-    switch (state) {
-      case 'active':
-      case 'online':
-        return 'bg-green-500';
-      case 'inactive':
-      case 'offline':
-        return 'bg-gray-500';
-      case 'error':
-        return 'bg-red-500';
-      default:
-        return 'bg-yellow-500';
-    }
-  };
+  const presenceColor = (presence?: AgentPresence) =>
+    presence === 'online' ? 'bg-green-500' : 'bg-gray-500';
 
   return (
     <div>
@@ -252,10 +245,15 @@ export default function AgentsPage() {
                 <div>
                   <h3 className="text-white font-semibold">{agent.name}</h3>
                   <p className="text-xs text-gray-500 font-mono mt-0.5">{agent.id}</p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    {formatRelativeTime(agent.last_seen_at)}
+                  </p>
                 </div>
                 <div className="flex items-center gap-1.5">
-                  <span className={`w-2.5 h-2.5 rounded-full ${stateColor(agent.state)}`} />
-                  <span className="text-xs text-gray-400 capitalize">{agent.state}</span>
+                  <span className={`w-2.5 h-2.5 rounded-full ${presenceColor(agent.presence)}`} />
+                  <span className="text-xs text-gray-400 capitalize">
+                    {agent.presence ?? 'offline'}
+                  </span>
                 </div>
               </div>
 

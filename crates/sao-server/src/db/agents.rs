@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -123,6 +125,42 @@ pub async fn last_egress_at(
             .fetch_optional(pool)
             .await?;
     Ok(row.and_then(|r| r.0))
+}
+
+/// Batched companion to `last_egress_at` for the agents-list endpoint.
+/// Returns a map keyed by `agent_id` with the most recent `created_at` from
+/// `orion_egress_events`. Agents with no rows are absent from the map.
+pub async fn last_egress_at_for_many(
+    pool: &PgPool,
+    agent_ids: &[Uuid],
+) -> Result<HashMap<Uuid, chrono::DateTime<chrono::Utc>>, sqlx::Error> {
+    if agent_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows: Vec<(Uuid, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
+        "SELECT agent_id, MAX(created_at) FROM orion_egress_events \
+         WHERE agent_id = ANY($1) GROUP BY agent_id",
+    )
+    .bind(agent_ids)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(id, ts)| ts.map(|t| (id, t)))
+        .collect())
+}
+
+/// Online if the agent shipped egress within the last 5 minutes; otherwise Offline.
+/// Presence is derived purely from observed egress activity — there is no separate
+/// heartbeat protocol — so a parked cockpit lapses to Offline correctly.
+pub fn presence_from_last_seen(
+    now: chrono::DateTime<chrono::Utc>,
+    last_seen: Option<chrono::DateTime<chrono::Utc>>,
+) -> &'static str {
+    match last_seen {
+        Some(t) if now.signed_duration_since(t) < chrono::Duration::minutes(5) => "online",
+        _ => "offline",
+    }
 }
 
 pub async fn delete_agent(pool: &PgPool, id: Uuid) -> Result<bool, sqlx::Error> {
