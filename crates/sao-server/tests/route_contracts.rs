@@ -13,10 +13,38 @@ fn auth_routes_use_start_finish_paths() {
 fn vault_routes_use_vault_secrets_namespace() {
     let src = include_str!("../src/routes/vault.rs");
     assert!(src.contains("/api/vault/status"));
+    assert!(src.contains("/api/vault/configure"));
+    assert!(src.contains("/api/vault/rotate-passphrase"));
     assert!(src.contains("/api/vault/unseal"));
     assert!(src.contains("/api/vault/seal"));
     assert!(src.contains("/api/vault/secrets"));
     assert!(src.contains("/api/vault/secrets/:id"));
+}
+
+#[test]
+fn vault_passphrase_lifecycle_routes_are_admin_gated_and_rate_limited() {
+    let vault_src = include_str!("../src/routes/vault.rs");
+    let security_src = include_str!("../src/security.rs");
+
+    // Admin-gated lifecycle handlers
+    assert!(vault_src.contains("async fn configure_vault"));
+    assert!(vault_src.contains("async fn rotate_passphrase"));
+    assert!(vault_src.contains("user: AdminUser"));
+
+    // First-time configure must refuse to overwrite an existing VMK
+    assert!(vault_src.contains("vault_already_initialized"));
+    assert!(vault_src.contains("StatusCode::CONFLICT"));
+
+    // Rotation requires proving the current passphrase and rejects same-as-current
+    assert!(vault_src.contains("current_passphrase"));
+    assert!(vault_src.contains("same_as_current"));
+    assert!(vault_src.contains("invalid_credentials"));
+
+    // Both lifecycle routes are individually rate-limited
+    assert!(security_src.contains("\"/api/vault/configure\""));
+    assert!(security_src.contains("\"/api/vault/rotate-passphrase\""));
+    assert!(security_src.contains("vault-configure"));
+    assert!(security_src.contains("vault-rotate"));
 }
 
 #[test]
@@ -35,6 +63,25 @@ fn admin_routes_use_oidc_provider_namespace() {
     assert!(src.contains("/api/admin/users/:id/role"));
     assert!(src.contains("/api/admin/entity-archives"));
     assert!(src.contains("Cannot demote the last administrator"));
+}
+
+#[test]
+fn installer_source_registration_validates_artifact_format() {
+    let admin_src = include_str!("../src/routes/admin.rs");
+    let installer_src = include_str!("../src/installers.rs");
+
+    // Admin probe + create handlers must run the new probe path that returns
+    // format hints, and create must refuse to persist non-MSI artifacts.
+    assert!(admin_src.contains("crate::installers::probe_url"));
+    assert!(admin_src.contains("invalid_installer_artifact"));
+    assert!(admin_src.contains("sha_mismatch"));
+
+    // Format validator + sniffer live in the installers module and the
+    // fetch path runs validation BEFORE writing bytes to disk.
+    assert!(installer_src.contains("validate_artifact_for_kind"));
+    assert!(installer_src.contains("sniff_format"));
+    assert!(installer_src.contains("MSI_MAGIC"));
+    assert!(installer_src.contains("// Validate format BEFORE writing to disk"));
 }
 
 #[test]

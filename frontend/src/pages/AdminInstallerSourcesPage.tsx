@@ -7,7 +7,7 @@ import {
   probeInstallerSource,
   setDefaultInstallerSource,
 } from '../api/installer-sources';
-import type { InstallerSource } from '../types';
+import type { InstallerSource, ProbeInstallerResult } from '../types';
 
 export default function AdminInstallerSourcesPage() {
   const queryClient = useQueryClient();
@@ -86,19 +86,19 @@ function CreateForm({ onCreated }: { onCreated: () => Promise<void> | void }) {
   const [isDefault, setIsDefault] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [probedSha, setProbedSha] = useState<string | null>(null);
+  const [probe, setProbe] = useState<ProbeInstallerResult | null>(null);
 
   const handleProbe = async () => {
     setError('');
-    setProbedSha(null);
+    setProbe(null);
     if (!url.trim()) {
       setError('URL is required');
       return;
     }
     setBusy(true);
     try {
-      const result = await probeInstallerSource(url.trim());
-      setProbedSha(result.sha256);
+      const result = await probeInstallerSource(url.trim(), 'orion-msi');
+      setProbe(result);
       if (!sha.trim()) setSha(result.sha256);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Probe failed');
@@ -126,9 +126,33 @@ function CreateForm({ onCreated }: { onCreated: () => Promise<void> | void }) {
     }
   };
 
+  const formatLooksWrong = probe !== null && probe.format_ok === false;
+  const formatVerified = probe !== null && probe.format_ok === true;
+  const canRegister =
+    !busy && !!url.trim() && !!sha.trim() && !formatLooksWrong;
+
   return (
     <div className="bg-gray-800 rounded-xl border border-gray-700 p-5 mb-6 space-y-3">
       <h2 className="text-lg font-semibold text-white">Register installer source</h2>
+      <div className="rounded-lg border border-slate-700 bg-slate-900/40 p-3 text-xs text-slate-400">
+        <p className="font-medium text-slate-300">Use a built-MSI release asset URL.</p>
+        <p className="mt-1">
+          GitHub Releases publishes built artifacts at{' '}
+          <span className="font-mono text-slate-200">
+            /releases/download/&lt;tag&gt;/&lt;asset&gt;.msi
+          </span>{' '}
+          or the convenience alias{' '}
+          <span className="font-mono text-slate-200">
+            /releases/latest/download/&lt;asset&gt;.msi
+          </span>
+          . URLs that look like{' '}
+          <span className="font-mono text-amber-300">
+            /archive/refs/tags/&lt;tag&gt;.zip
+          </span>{' '}
+          are GitHub-generated source-code archives, not installers, and SAO will
+          refuse to register them.
+        </p>
+      </div>
       <div>
         <label className="block text-xs text-gray-400 mb-1">Download URL</label>
         <div className="flex gap-2">
@@ -147,10 +171,46 @@ function CreateForm({ onCreated }: { onCreated: () => Promise<void> | void }) {
             Probe sha256
           </button>
         </div>
-        {probedSha && (
-          <p className="text-xs text-green-400 mt-1 font-mono break-all">
-            Computed: {probedSha}
-          </p>
+        {probe && (
+          <div className="mt-2 space-y-1 text-xs font-mono break-all">
+            <p className={formatVerified ? 'text-green-400' : 'text-amber-300'}>
+              sha256: {probe.sha256}
+            </p>
+            {typeof probe.size_bytes === 'number' && (
+              <p className="text-slate-400">
+                size: {probe.size_bytes.toLocaleString()} bytes
+              </p>
+            )}
+            {probe.format_hint && (
+              <p
+                className={
+                  formatVerified
+                    ? 'text-green-400 font-sans'
+                    : 'text-amber-300 font-sans'
+                }
+              >
+                format: {probe.format_hint}
+              </p>
+            )}
+          </div>
+        )}
+        {formatLooksWrong && (
+          <div className="mt-2 rounded border border-red-800 bg-red-900/30 p-3 text-xs text-red-200">
+            <p className="font-semibold">
+              This URL did not return a valid Windows Installer (.msi).
+            </p>
+            <p className="mt-1">
+              {probe?.format_error ||
+                'The first bytes of the response do not match the OLE2 magic that msiexec needs.'}
+            </p>
+            <p className="mt-2">
+              Likely cause: the URL is a GitHub source-tarball
+              (<span className="font-mono">/archive/refs/tags/...zip</span>) or a
+              release asset that has not been built/published yet. Use a{' '}
+              <span className="font-mono">/releases/download/&lt;tag&gt;/&lt;file&gt;.msi</span>{' '}
+              URL instead. Registration is blocked until this resolves.
+            </p>
+          </div>
         )}
       </div>
       <div className="grid grid-cols-2 gap-3">
@@ -199,10 +259,14 @@ function CreateForm({ onCreated }: { onCreated: () => Promise<void> | void }) {
       <div className="flex justify-end">
         <button
           onClick={handleCreate}
-          disabled={busy || !url.trim() || !sha.trim()}
-          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-900 text-white text-sm rounded-lg"
+          disabled={!canRegister}
+          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-900 disabled:cursor-not-allowed text-white text-sm rounded-lg"
         >
-          {busy ? 'Working...' : 'Register + warm cache'}
+          {busy
+            ? 'Working...'
+            : formatLooksWrong
+              ? 'Format check failed'
+              : 'Register + warm cache'}
         </button>
       </div>
     </div>

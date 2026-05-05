@@ -79,6 +79,15 @@ Docker Compose stack with a real Anthropic upstream:
 ### Operational ergonomics
 - **Auto-unseal** — `SAO_VAULT_PASSPHRASE` env var unseals on startup so LLM keys stay
   readable across container restarts. Wired through compose by default.
+- **Vault passphrase lifecycle** — `/admin/...`-style flows live on the
+  existing `/vault` page: first-time admins see a **Configure vault
+  passphrase** card when the vault is uninitialized; afterwards, admins can
+  open **Rotate passphrase** from either the sealed unseal screen or the
+  unsealed secrets list. Backed by `POST /api/vault/configure` (first-time;
+  refuses 409 once a VMK exists) and `POST /api/vault/rotate-passphrase`
+  (requires the current passphrase, re-seals the same VMK so existing
+  ciphertexts stay valid). Both are CSRF-gated, admin-only, audited, and
+  rate-limited.
 - **Self-serve installer staging** — no more host-shell access required to drop an MSI on
   the server. Admin pastes a URL; SAO downloads + verifies + caches.
 - **Sha-based pinning** — re-rolling the default installer never breaks existing agents;

@@ -644,9 +644,11 @@ async fn update_llm_provider(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-    if let Err(error) =
-        validate_enabled_provider_model_contract(req.enabled, &approved_model_names, default_model.as_deref())
-    {
+    if let Err(error) = validate_enabled_provider_model_contract(
+        req.enabled,
+        &approved_model_names,
+        default_model.as_deref(),
+    ) {
         return (StatusCode::BAD_REQUEST, Json(json!({ "error": error })));
     }
     let approved_models = json!(approved_model_names);
@@ -734,9 +736,7 @@ fn validate_enabled_provider_model_contract(
     }
 
     if approved_models.is_empty() {
-        return Err(
-            "Select at least one approved model before enabling this provider".to_string(),
-        );
+        return Err("Select at least one approved model before enabling this provider".to_string());
     }
 
     let default_model = default_model
@@ -1036,10 +1036,14 @@ async fn list_installer_sources(
 #[derive(Deserialize)]
 struct ProbeInstallerRequest {
     url: String,
+    #[serde(default = "default_kind")]
+    kind: String,
 }
 
 /// Compute the sha256 of an upstream URL without persisting anything. Lets the admin
-/// confirm the hash before they commit it as `expected_sha256`.
+/// confirm the hash before they commit it as `expected_sha256`. Also runs a kind-specific
+/// format check (e.g. OLE2 magic for `orion-msi`) so the UI can warn the operator before
+/// they ever click "Register" with a URL that returns a ZIP source archive or HTML page.
 async fn probe_installer_source(
     AdminUser(_admin): AdminUser,
     Json(req): Json<ProbeInstallerRequest>,
@@ -1050,10 +1054,17 @@ async fn probe_installer_source(
             Json(json!({ "error": "url is required" })),
         );
     }
-    match crate::installers::sha256_of_url(req.url.trim()).await {
-        Ok(sha) => (
+    match crate::installers::probe_url(req.url.trim(), &req.kind).await {
+        Ok(probe) => (
             StatusCode::OK,
-            Json(json!({ "url": req.url, "sha256": sha })),
+            Json(json!({
+                "url": req.url,
+                "sha256": probe.sha256,
+                "size_bytes": probe.size_bytes,
+                "format_hint": probe.format_hint,
+                "format_ok": probe.format_ok,
+                "format_error": probe.format_error,
+            })),
         ),
         Err(e) => (
             StatusCode::BAD_GATEWAY,
@@ -1111,6 +1122,49 @@ async fn create_installer_source(
         );
     }
 
+    // Probe before persisting so we never store an installer source whose URL returns
+    // bytes that can't actually be installed (the classic operator pitfall is pasting a
+    // GitHub /archive/refs/tags/<tag>.zip URL — that's a source-code archive, not an MSI).
+    match crate::installers::probe_url(req.url.trim(), &req.kind).await {
+        Ok(probe) => {
+            if !probe
+                .sha256
+                .eq_ignore_ascii_case(req.expected_sha256.trim())
+            {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({
+                        "error": "expected_sha256 does not match the URL's current sha256",
+                        "code": "sha_mismatch",
+                        "url_sha256": probe.sha256,
+                        "expected_sha256": req.expected_sha256.trim().to_lowercase(),
+                    })),
+                );
+            }
+            if !probe.format_ok {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({
+                        "error": probe.format_error.clone()
+                            .unwrap_or_else(|| "URL did not return a valid installer artifact".to_string()),
+                        "code": "invalid_installer_artifact",
+                        "format_hint": probe.format_hint,
+                        "looks_like": probe.format_hint,
+                    })),
+                );
+            }
+        }
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({
+                    "error": format!("Failed to probe URL: {e}"),
+                    "code": "probe_failed",
+                })),
+            );
+        }
+    }
+
     let row = match crate::db::installer_sources::insert(
         &state.inner.db,
         &req.kind,
@@ -1132,7 +1186,10 @@ async fn create_installer_source(
         }
     };
 
-    // Pre-warm the cache so the next bundle download is instant. Failure here is non-fatal.
+    // Pre-warm the cache so the next bundle download is instant. The probe above already
+    // validated content, so a failure here is something operationally weird (disk full,
+    // upstream flapped, etc.) — surface it but don't fail the registration since the row
+    // is committed and the cache will fill on first download.
     let pre_warm = match crate::installers::fetch_or_cache(&row).await {
         Ok(path) => json!({ "ok": true, "cache_path": path.display().to_string() }),
         Err(e) => json!({ "ok": false, "error": e.to_string() }),

@@ -208,6 +208,29 @@ token for that agent (one live token per agent).
 > `/api/llm/generate` returns 503 (`vault is sealed`) until you POST `/api/vault/unseal`
 > from the admin UI.
 
+### Vault passphrase lifecycle
+
+The vault master key is sealed by an Argon2id-derived key, and the passphrase
+that derives that key has its own admin-only lifecycle:
+
+- `POST /api/vault/configure` (first-time setup): generates a fresh master
+  key and seals it with the supplied passphrase. Returns `409
+  vault_already_initialized` if a master key already exists; first-time
+  configure never overwrites an existing vault.
+- `POST /api/vault/rotate-passphrase`: requires the current passphrase, then
+  re-seals the *same* master key with a new Argon2id salt and a fresh AEAD
+  nonce. Existing encrypted secrets stay valid because the master key bytes
+  do not change. Returns `auto_unseal_env_stale: true` when
+  `SAO_VAULT_PASSPHRASE` is set, prompting you to rotate the deployment-side
+  secret before the next restart.
+
+Both endpoints are CSRF-gated, admin-only, audited (`vault.configure`,
+`vault.rotate_passphrase`, `vault.rotate_passphrase.failed`) and rate-limited
+to 5 requests per 5 minutes per IP. The `/vault` page exposes the same flows
+in the UI: a first-time **Configure vault passphrase** card when the vault is
+uninitialized, and a **Rotate passphrase** action available to admins from
+both the sealed unseal screen and the unsealed secrets list.
+
 ## Development & Contributing
 
 For local development, the Azure installer is still the production story, but the repo includes a local Compose workflow for integration work:
@@ -276,6 +299,23 @@ python -m unittest discover installer/tests
 POSTGRES_PASSWORD=local-dev-only-change-me docker compose -f docker/docker-compose.yml config
 az bicep build --file installer/bicep/main.bicep
 ```
+
+Windows local dev note: `webauthn-rs` pulls `openssl-sys` transitively, and
+`.cargo/config.toml` pins `+crt-static` for `x86_64-pc-windows-msvc`. Running
+`cargo build` directly on Windows therefore needs `OPENSSL_DIR`,
+`OPENSSL_LIB_DIR`, and `OPENSSL_STATIC` pointed at an OpenSSL-Win64 install
+(see the comment block in `.cargo/config.toml`). The helper script
+`scripts/build-windows.ps1` sets these for you and forwards the rest of the
+arguments to cargo:
+
+```powershell
+pwsh -File scripts/build-windows.ps1
+pwsh -File scripts/build-windows.ps1 -Cargo "test --workspace"
+pwsh -File scripts/build-windows.ps1 -Cargo "clippy --workspace --all-targets -- -D warnings"
+```
+
+The Linux CI image (`.github/workflows/ci.yml`) installs `libssl-dev`
+system-wide, so it does not need this script.
 
 Repository notes:
 

@@ -94,6 +94,15 @@ export interface InstallerSource {
 export interface ProbeInstallerResult {
   url: string;
   sha256: string;
+  size_bytes?: number;
+  /** Best-effort hint at what the URL actually returned; useful when the URL
+   *  doesn't point at a built MSI (e.g. a GitHub source-tarball ZIP). */
+  format_hint?: string;
+  /** True when the bytes match the expected file format for the kind (e.g.
+   *  OLE2 magic for orion-msi). When false the registration endpoint will
+   *  refuse to persist the source. */
+  format_ok?: boolean;
+  format_error?: string | null;
 }
 
 export interface CreateInstallerSourceData {
@@ -235,6 +244,29 @@ export interface AdminEntityOverview {
 
 export interface VaultStatus {
   status: 'uninitialized' | 'sealed' | 'unsealed';
+  /** True when SAO_VAULT_PASSPHRASE is set in the runtime env. After a
+   *  rotation the operator must update this secret before the next restart,
+   *  or auto-unseal will fail and the vault will boot sealed. */
+  auto_unseal_env_present?: boolean;
+}
+
+export interface ConfigureVaultData {
+  passphrase: string;
+  passphrase_confirmation: string;
+}
+
+export interface RotateVaultPassphraseData {
+  current_passphrase: string;
+  new_passphrase: string;
+  new_passphrase_confirmation: string;
+}
+
+export interface VaultLifecycleResponse {
+  status: 'unsealed';
+  auto_unseal_env_present?: boolean;
+  /** Set by the rotation endpoint when SAO_VAULT_PASSPHRASE is configured —
+   *  the deployment-side secret is now stale and must be rotated to match. */
+  auto_unseal_env_stale?: boolean;
 }
 
 export interface CreateSecretData {

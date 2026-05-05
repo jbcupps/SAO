@@ -14,12 +14,13 @@ export async function listInstallerSources(): Promise<InstallerSource[]> {
 
 export async function probeInstallerSource(
   url: string,
+  kind: string = 'orion-msi',
 ): Promise<ProbeInstallerResult> {
   return apiRequest<ProbeInstallerResult>(
     '/api/admin/installer-sources/probe',
     {
       method: 'POST',
-      body: JSON.stringify({ url }),
+      body: JSON.stringify({ url, kind }),
     },
   );
 }

@@ -44,3 +44,7 @@ docker/empty-installer-mount/*.msi
 # OS
 .DS_Store
 Thumbs.db
+
+# Local dev output
+*.log
+compose-config.yml

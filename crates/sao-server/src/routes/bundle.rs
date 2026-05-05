@@ -440,10 +440,20 @@ async fn resolve_installer(state: &AppState, agent: &AgentRow) -> Result<Vec<u8>
     if let (Some(sha), Some(filename)) = (&agent.installer_sha256, &agent.installer_filename) {
         if let Some(path) = crate::installers::cached_path(sha, filename) {
             if let Ok(bytes) = tokio::fs::read(&path).await {
-                return Ok(bytes);
+                if let Err(e) = crate::installers::validate_artifact_for_kind("orion-msi", &bytes) {
+                    tracing::warn!(
+                        agent_id = %agent.id,
+                        sha = sha,
+                        error = %e,
+                        "Pinned installer cache failed format validation; refetching",
+                    );
+                    let _ = tokio::fs::remove_file(&path).await;
+                } else {
+                    return Ok(bytes);
+                }
             }
         }
-        // Cache miss — try to refetch from the installer_sources row that matches this sha.
+        // Cache miss / bad cache — try to refetch from the installer_sources row that matches this sha.
         if let Ok(rows) = crate::db::installer_sources::list(&state.inner.db).await {
             if let Some(source) = rows
                 .into_iter()
@@ -487,6 +497,11 @@ async fn resolve_installer(state: &AppState, agent: &AgentRow) -> Result<Vec<u8>
     // 3. Legacy env-var fallback (file mounted into the container).
     if let Ok(path) = std::env::var("SAO_ORION_INSTALLER_PATH") {
         if let Ok(bytes) = tokio::fs::read(&path).await {
+            if let Err(e) = crate::installers::validate_artifact_for_kind("orion-msi", &bytes) {
+                return Err(format!(
+                    "SAO_ORION_INSTALLER_PATH={path} is not a valid Windows Installer: {e}",
+                ));
+            }
             return Ok(bytes);
         }
     }

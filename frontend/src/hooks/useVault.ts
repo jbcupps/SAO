@@ -1,6 +1,17 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { getVaultStatus, unsealVault, sealVault } from '../api/vault';
-import type { VaultStatus } from '../types';
+import {
+  configureVault,
+  getVaultStatus,
+  rotateVaultPassphrase,
+  sealVault,
+  unsealVault,
+} from '../api/vault';
+import type {
+  ConfigureVaultData,
+  RotateVaultPassphraseData,
+  VaultLifecycleResponse,
+  VaultStatus,
+} from '../types';
 import { useCallback } from 'react';
 
 export function useVault() {
@@ -29,14 +40,37 @@ export function useVault() {
     await queryClient.invalidateQueries({ queryKey: ['vault-status'] });
   }, [queryClient]);
 
+  const configure = useCallback(
+    async (data: ConfigureVaultData): Promise<VaultLifecycleResponse> => {
+      const result = await configureVault(data);
+      await queryClient.invalidateQueries({ queryKey: ['vault-status'] });
+      return result;
+    },
+    [queryClient],
+  );
+
+  const rotatePassphrase = useCallback(
+    async (
+      data: RotateVaultPassphraseData,
+    ): Promise<VaultLifecycleResponse> => {
+      const result = await rotateVaultPassphrase(data);
+      await queryClient.invalidateQueries({ queryKey: ['vault-status'] });
+      return result;
+    },
+    [queryClient],
+  );
+
   return {
     vaultStatus,
     isLoading,
     error,
     unseal,
     seal,
+    configure,
+    rotatePassphrase,
     isSealed: vaultStatus?.status === 'sealed',
     isUnsealed: vaultStatus?.status === 'unsealed',
     isUninitialized: vaultStatus?.status === 'uninitialized',
+    autoUnsealEnvPresent: vaultStatus?.auto_unseal_env_present === true,
   };
 }
