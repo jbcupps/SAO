@@ -95,11 +95,18 @@ Set the base URL (`http://host.docker.internal:11434` from inside the SAO contai
 
 Go to **/admin/installer-sources** → **+ Register installer source**:
 
-1. Paste a download URL — convention is the GitHub Releases `latest` URL:
-   ```
-   https://github.com/jbcupps/OrionII/releases/latest/download/OrionII_0.1.1_x64_en-US.msi
-   ```
-   (Or any URL SAO can `GET`.)
+1. Paste a download URL. Two convention options:
+   - Tag-stable (only updated on `vX.Y.Z` tag pushes):
+     ```
+     https://github.com/jbcupps/OrionII/releases/latest/download/OrionII_0.1.1_x64_en-US.msi
+     ```
+   - Edge rolling (refreshed on every push to OrionII `main` + nightly):
+     ```
+     https://github.com/jbcupps/OrionII/releases/download/edge/OrionII_0.1.1_x64_en-US.msi
+     ```
+   Avoid `https://github.com/jbcupps/OrionII/archive/refs/tags/<tag>.zip` — that's
+   GitHub's auto-generated source-code archive, not an MSI; SAO will refuse to
+   register it.
 2. Click **Probe sha256** — SAO computes the digest of what it sees at that URL.
 3. Confirm the sha matches what you expect, then fill **Filename** + **Version label** (the
    form pre-fills sensible defaults).
@@ -238,6 +245,8 @@ FROM audit_log WHERE action LIKE 'llm.%' ORDER BY created_at DESC LIMIT 20;
 | `503 OrionII installer is not available` | No installer source registered AND no `SAO_ORION_INSTALLER_PATH` env var. | Register a source under `/admin/installer-sources` (preferred) or set the env var to a mounted MSI path. |
 | Bundle download 503 with sha-mismatch | Cached file doesn't match registered sha (substituted upstream / corruption). | SAO refetches automatically on the next call; if upstream is permanently gone, register a new source. |
 | OrionII shows `Degraded fallback` for MODEL after a fresh container start | Vault is sealed → LLM proxy can't decrypt the API key. | Set `SAO_VAULT_PASSPHRASE` so compose auto-unseals on startup. |
+| `/api/llm/generate` returns 503 `vault is sealed` after rotating the vault passphrase from the UI | `SAO_VAULT_PASSPHRASE` still holds the old value; auto-unseal failed at startup. | Update the deployment env (or `.env` for local Compose) with the new passphrase and restart, or POST `/api/vault/unseal` once with the new value. The UI surfaces this as `auto_unseal_env_stale` after a rotation. |
+| Windows shows `This installation package could not be opened` when running `OrionII-Setup.msi` from a downloaded bundle | The registered installer source URL doesn't return a built MSI — usually because it points at GitHub's `archive/refs/tags/<tag>.zip` source-tarball alias instead of `releases/download/<tag>/<asset>.msi`. msiexec sees ZIP magic (`50 4B 03 04`) instead of OLE2 magic (`D0 CF 11 E0`). Not a code-signing issue. | Open `/admin/installer-sources`, register a `releases/download/...msi` URL (the **Probe sha256** button now refuses non-MSIs and shows what it actually got). Bundle download will return `503` with a clear "looks like ZIP archive..." hint until a valid source is registered. |
 | OrionII chat returns the deterministic fallback text | `/api/llm/generate` is failing — check `audit_log` for `llm.generate.failed`. | Common causes: vault sealed, model not on approved list, upstream API rejected the key. |
 | `503 Vault is sealed` on the LLM endpoint | Same as above. | Set `SAO_VAULT_PASSPHRASE`. |
 | `400 Configured provider is currently disabled` | Admin disabled the provider after the agent was created. | Re-enable in `/admin/llm-providers`. |

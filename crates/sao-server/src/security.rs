@@ -515,6 +515,10 @@ fn rate_limit_bucket(method: &Method, path: &str) -> Option<(&'static str, usize
         }
         ("POST", "/api/auth/refresh") => Some(("refresh", 30, Duration::from_secs(60))),
         ("POST", "/api/vault/unseal") => Some(("vault-unseal", 5, Duration::from_secs(300))),
+        ("POST", "/api/vault/configure") => Some(("vault-configure", 5, Duration::from_secs(300))),
+        ("POST", "/api/vault/rotate-passphrase") => {
+            Some(("vault-rotate", 5, Duration::from_secs(300)))
+        }
         ("POST", "/api/admin/oidc/providers") => Some(("admin-oidc", 30, Duration::from_secs(60))),
         ("PUT", path) if path.starts_with("/api/admin/oidc/providers/") => {
             Some(("admin-oidc", 30, Duration::from_secs(60)))

@@ -52,3 +52,43 @@ pub async fn insert_vmk(
     .await?;
     Ok(())
 }
+
+/// Rotate the passphrase envelope for an existing VMK row.
+///
+/// The underlying VaultMasterKey bytes are *not* changed; only the
+/// passphrase-derived envelope (sealed ciphertext, KDF salt, AEAD nonce) is
+/// replaced. Existing secret ciphertexts therefore stay valid.
+///
+/// This intentionally updates the existing row in place (and stamps
+/// `rotated_at`) rather than inserting a new row, so `get_vmk()` keeps
+/// returning a single source of truth for the current envelope and we never
+/// race a stale row.
+pub async fn rotate_vmk_envelope(
+    pool: &PgPool,
+    id: i32,
+    encrypted_key: &[u8],
+    kdf_salt: &[u8],
+    kdf_memory_cost: i32,
+    kdf_time_cost: i32,
+    kdf_parallelism: i32,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        "UPDATE vault_master_key \
+         SET encrypted_key = $2, \
+             kdf_salt = $3, \
+             kdf_memory_cost = $4, \
+             kdf_time_cost = $5, \
+             kdf_parallelism = $6, \
+             rotated_at = now() \
+         WHERE id = $1",
+    )
+    .bind(id)
+    .bind(encrypted_key)
+    .bind(kdf_salt)
+    .bind(kdf_memory_cost)
+    .bind(kdf_time_cost)
+    .bind(kdf_parallelism)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}

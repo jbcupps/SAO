@@ -5,7 +5,11 @@ import {
   listOidcProviders,
   queryAuditLog,
 } from './admin';
-import { listSecrets } from './vault';
+import {
+  configureVault,
+  listSecrets,
+  rotateVaultPassphrase,
+} from './vault';
 import { getMe, webauthnLoginStart } from './auth';
 import { deleteAgent, updateAgent } from './agents';
 import { listAvailableLlmProviders } from './llm-providers';
@@ -72,6 +76,66 @@ describe('frontend api contract adapters', () => {
         credentials: 'include',
       }),
     );
+  });
+
+  it('posts the configure-vault first-time setup payload with CSRF', async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({ status: 'unsealed', auto_unseal_env_present: false }),
+    );
+
+    await configureVault({
+      passphrase: 'correct horse battery staple',
+      passphrase_confirmation: 'correct horse battery staple',
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/vault/configure',
+      expect.objectContaining({
+        method: 'POST',
+        credentials: 'include',
+        headers: expect.objectContaining({
+          'X-CSRF-Token': 'test-csrf-token',
+        }),
+      }),
+    );
+    const body = JSON.parse(
+      (fetchMock.mock.calls[0][1] as RequestInit).body as string,
+    );
+    expect(body).toEqual({
+      passphrase: 'correct horse battery staple',
+      passphrase_confirmation: 'correct horse battery staple',
+    });
+  });
+
+  it('posts the rotate-passphrase payload with current + new + confirmation', async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({ status: 'unsealed', auto_unseal_env_stale: true }),
+    );
+
+    await rotateVaultPassphrase({
+      current_passphrase: 'old correct horse',
+      new_passphrase: 'new correct horse battery',
+      new_passphrase_confirmation: 'new correct horse battery',
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/vault/rotate-passphrase',
+      expect.objectContaining({
+        method: 'POST',
+        credentials: 'include',
+        headers: expect.objectContaining({
+          'X-CSRF-Token': 'test-csrf-token',
+        }),
+      }),
+    );
+    const body = JSON.parse(
+      (fetchMock.mock.calls[0][1] as RequestInit).body as string,
+    );
+    expect(body).toEqual({
+      current_passphrase: 'old correct horse',
+      new_passphrase: 'new correct horse battery',
+      new_passphrase_confirmation: 'new correct horse battery',
+    });
   });
 
   it('maps webauthn login start challenge to options', async () => {

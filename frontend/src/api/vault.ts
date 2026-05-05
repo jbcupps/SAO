@@ -1,13 +1,34 @@
 import { apiRequest } from './client';
 import type {
-  VaultStatus,
-  VaultSecret,
+  ConfigureVaultData,
   CreateSecretData,
+  RotateVaultPassphraseData,
   UpdateSecretData,
+  VaultLifecycleResponse,
+  VaultSecret,
+  VaultStatus,
 } from '../types';
 
 export async function getVaultStatus(): Promise<VaultStatus> {
   return apiRequest<VaultStatus>('/api/vault/status');
+}
+
+export async function configureVault(
+  data: ConfigureVaultData,
+): Promise<VaultLifecycleResponse> {
+  return apiRequest<VaultLifecycleResponse>('/api/vault/configure', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function rotateVaultPassphrase(
+  data: RotateVaultPassphraseData,
+): Promise<VaultLifecycleResponse> {
+  return apiRequest<VaultLifecycleResponse>('/api/vault/rotate-passphrase', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
 }
 
 export async function unsealVault(passphrase: string): Promise<void> {
